@@ -31,8 +31,7 @@ echo -e "${PURPLE}      Welcome to UserRenew Smart Installer        ${RESET}"
 echo -e "${CYAN}====================================================${RESET}"
 echo ""
 
-read -p "$(echo -e ${PURPLE}"[?] Enter Telegram Admin Bot Token: "${RESET})" BOT_TOKEN
-read -p "$(echo -e ${PURPLE}"[?] Enter Your Telegram Admin Numeric ID (e.g. 12345678): "${RESET})" ADMIN_ID
+read -p "$(echo -e ${PURPLE}"[?] Enter Telegram Bot Token: "${RESET})" BOT_TOKEN
 read -p "$(echo -e ${PURPLE}"[?] Enter Panel Port (e.g., 8081): "${RESET})" PANEL_PORT
 read -p "$(echo -e ${PURPLE}"[?] Enter Panel Admin Username: "${RESET})" PANEL_USER
 read -p "$(echo -e ${PURPLE}"[?] Enter Panel Admin Password: "${RESET})" PANEL_PASS
@@ -50,30 +49,31 @@ fi
 mkdir -p /root/UserRenew
 cd /root/UserRenew
 
-# --- panel.html (تم بنفش لایت و ورودی‌های بزرگتر) ---
+# --- panel.html ---
 cat << 'EOF' > panel.html
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>پنل مدیریت UserRenew</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;700;900&display=swap');
-        body { font-family: 'Vazirmatn', sans-serif; background-color: #09090b; color: #ffffff; }
+        body { font-family: 'Vazirmatn', sans-serif; background-color: #09090b; color: #ffffff; overflow-x: hidden; }
         
-        .glass-panel { background: #18181b; border: 1px solid #27272a; border-radius: 28px; padding: 32px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+        .glass-panel { background: #18181b; border: 1px solid #27272a; border-radius: 28px; padding: 24px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+        @media (min-width: 640px) { .glass-panel { padding: 32px; } }
         
         input, select, textarea { 
             background: #27272a; border: 1px solid #3f3f46; color: white; width: 100%; 
-            padding: 18px 22px; border-radius: 18px; margin-top: 8px; outline: none; 
-            font-size: 1.1rem; transition: all 0.3s ease;
+            padding: 16px 20px; border-radius: 18px; margin-top: 8px; outline: none; 
+            font-size: 1rem; transition: all 0.3s ease;
         }
         input:focus, select:focus, textarea:focus { border-color: #c084fc; background: #3f3f46; box-shadow: 0 0 0 4px rgba(192,132,252,0.1); }
         
-        .toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%) translateY(-20px); background: #c084fc; color: black; padding: 16px 32px; border-radius: 100px; z-index: 1000; opacity: 0; visibility: hidden; transition: 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55); font-weight: bold; }
+        .toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%) translateY(-20px); background: #c084fc; color: black; padding: 16px 32px; border-radius: 100px; z-index: 1000; opacity: 0; visibility: hidden; transition: 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55); font-weight: bold; width: max-content; max-width: 90%; text-align: center;}
         .toast.show { opacity: 1; visibility: visible; transform: translateX(-50%) translateY(0); }
         
         ::-webkit-scrollbar { width: 8px; }
@@ -81,7 +81,7 @@ cat << 'EOF' > panel.html
         ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 10px; }
         ::-webkit-scrollbar-thumb:hover { background: #c084fc; }
 
-        .btn-primary { background: #c084fc; color: #09090b; font-weight: 900; padding: 18px; border-radius: 18px; transition: all 0.3s; width: 100%; font-size: 1.1rem; }
+        .btn-primary { background: #c084fc; color: #09090b; font-weight: 900; padding: 16px; border-radius: 18px; transition: all 0.3s; width: 100%; font-size: 1.1rem; }
         .btn-primary:hover { background: #d8b4fe; transform: translateY(-2px); box-shadow: 0 10px 20px rgba(192,132,252,0.2); }
     </style>
 </head>
@@ -90,65 +90,88 @@ cat << 'EOF' > panel.html
     
     <div id="login-screen" class="min-h-screen flex items-center justify-center p-4">
         <div class="w-full max-w-md text-center glass-panel">
-            <div class="w-24 h-24 rounded-full bg-[#c084fc]/10 flex items-center justify-center mx-auto mb-6 border border-[#c084fc]/30">
+            <div class="w-24 h-24 rounded-full bg-[#c084fc]/10 flex items-center justify-center mx-auto mb-8 border border-[#c084fc]/30">
                 <i class="fas fa-fingerprint text-5xl text-[#c084fc]"></i>
             </div>
-            <h2 class="text-3xl font-black mb-10">ورود به سیستم</h2>
-            <input type="text" id="username" placeholder="نام کاربری" dir="ltr" class="mb-5 text-center text-xl">
-            <input type="password" id="password" placeholder="رمز عبور" dir="ltr" class="mb-10 text-center text-xl">
+            <h2 class="text-3xl font-black mb-8">ورود به سیستم</h2>
+            <div class="space-y-5 mb-10">
+                <input type="text" id="username" placeholder="نام کاربری" dir="ltr" class="text-center text-xl !m-0">
+                <input type="password" id="password" placeholder="رمز عبور" dir="ltr" class="text-center text-xl !m-0">
+            </div>
             <button onclick="login()" class="btn-primary">تایید و ورود</button>
         </div>
     </div>
 
-    <div id="main-app" class="hidden max-w-3xl mx-auto p-4 pt-12 pb-24">
-        <div class="flex justify-between items-center mb-10 glass-panel !py-5 !px-8">
+    <div id="main-app" class="hidden max-w-4xl mx-auto p-4 pt-8 pb-24 space-y-6">
+        <div class="flex justify-between items-center glass-panel !py-4 !px-6">
             <div class="text-2xl font-black text-[#c084fc] flex items-center"><i class="fas fa-bolt ml-3"></i> UserRenew</div>
-            <button onclick="logout()" class="w-12 h-12 rounded-full bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center"><i class="fas fa-power-off text-xl"></i></button>
+            <div class="flex gap-3">
+                <button onclick="openSettingsModal()" class="w-12 h-12 rounded-full bg-[#27272a] hover:bg-[#3f3f46] text-white transition-colors flex items-center justify-center"><i class="fas fa-cog text-xl"></i></button>
+                <button onclick="logout()" class="w-12 h-12 rounded-full bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center"><i class="fas fa-power-off text-xl"></i></button>
+            </div>
         </div>
 
         <div class="glass-panel">
-            <div class="flex justify-between items-center mb-8 border-b border-[#27272a] pb-6">
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8 border-b border-[#27272a] pb-6">
                 <h3 class="text-xl font-bold flex items-center"><i class="fas fa-server ml-3 text-[#c084fc] text-2xl"></i>سرورهای متصل</h3>
-                <button onclick="openServerModal()" class="bg-[#c084fc]/20 text-[#c084fc] hover:bg-[#c084fc] hover:text-black transition-all px-6 py-3 rounded-2xl text-md font-bold border border-[#c084fc]/30 flex items-center"><i class="fas fa-plus ml-2"></i> افزودن سرور</button>
+                <button onclick="openServerModal()" class="w-full sm:w-auto bg-[#c084fc]/20 text-[#c084fc] hover:bg-[#c084fc] hover:text-black transition-all px-6 py-3 rounded-xl text-md font-bold border border-[#c084fc]/30 flex items-center justify-center"><i class="fas fa-plus ml-2"></i> افزودن سرور</button>
             </div>
             
-            <div id="servers-list" class="space-y-4 max-h-[500px] overflow-y-auto pr-2"></div>
+            <div id="servers-list" class="space-y-4 max-h-[60vh] overflow-y-auto pr-2"></div>
         </div>
     </div>
 
-    <div id="server-modal" class="fixed inset-0 bg-black/95 hidden z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
-        <div class="w-full max-w-lg glass-panel">
+    <!-- Modal تنظیمات ربات -->
+    <div id="settings-modal" class="fixed inset-0 bg-black/95 hidden z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
+        <div class="w-full max-w-md glass-panel relative">
+            <button onclick="closeSettingsModal()" class="absolute top-6 left-6 text-gray-400 hover:text-white"><i class="fas fa-times text-xl"></i></button>
+            <h3 class="text-2xl font-black mb-8 text-[#c084fc] flex items-center"><i class="fas fa-robot ml-3"></i> تنظیمات ربات تلگرام</h3>
+            
+            <div class="space-y-6 mb-8">
+                <div>
+                    <label class="text-sm font-bold text-gray-400 ml-2">آیدی عددی تلگرام شما (Chat ID)</label>
+                    <input type="text" id="admin-id-input" placeholder="مثلاً 12345678" dir="ltr" class="!mt-2">
+                    <p class="text-xs text-gray-500 mt-2">برای پیدا کردن آیدی، در تلگرام ربات را استارت بزنید.</p>
+                </div>
+            </div>
+            <button onclick="saveSettings()" class="btn-primary">ذخیره تنظیمات</button>
+        </div>
+    </div>
+
+    <!-- Modal سرور -->
+    <div id="server-modal" class="fixed inset-0 bg-black/95 hidden z-[100] flex flex-col items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
+        <div class="w-full max-w-lg glass-panel my-auto">
             <h3 class="text-2xl font-black mb-8 text-[#c084fc] flex items-center" id="server-modal-title"><i class="fas fa-server ml-3"></i> افزودن سرور جدید</h3>
             <input type="hidden" id="srv-id">
             
-            <div class="space-y-4 mb-8">
+            <div class="space-y-5 mb-8">
                 <div>
                     <label class="text-sm font-bold text-gray-400 ml-2">نام نمایشی</label>
-                    <input type="text" id="srv-name" placeholder="مثال: سرور آلمان">
+                    <input type="text" id="srv-name" placeholder="مثال: سرور آلمان" class="!mt-2">
                 </div>
                 <div>
                     <label class="text-sm font-bold text-gray-400 ml-2">آدرس پنل (شامل پورت)</label>
-                    <input type="text" id="srv-host" placeholder="https://ip:port/path" dir="ltr">
+                    <input type="text" id="srv-host" placeholder="https://ip:port/path" dir="ltr" class="!mt-2">
                 </div>
-                <div class="grid grid-cols-2 gap-4">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
                     <div>
                         <label class="text-sm font-bold text-gray-400 ml-2">نام کاربری پنل</label>
-                        <input type="text" id="srv-user" placeholder="admin" dir="ltr">
+                        <input type="text" id="srv-user" placeholder="admin" dir="ltr" class="!mt-2">
                     </div>
                     <div>
                         <label class="text-sm font-bold text-gray-400 ml-2">رمز عبور پنل</label>
-                        <input type="password" id="srv-pass" placeholder="***" dir="ltr">
+                        <input type="password" id="srv-pass" placeholder="***" dir="ltr" class="!mt-2">
                     </div>
                 </div>
                 <div>
                     <label class="text-sm font-bold text-gray-400 ml-2">مسیر امن Vless (جهت دور زدن فیلترینگ)</label>
-                    <textarea id="srv-xray" rows="3" placeholder="vless://..." dir="ltr" class="text-sm font-mono"></textarea>
+                    <textarea id="srv-xray" rows="3" placeholder="vless://..." dir="ltr" class="text-sm font-mono !mt-2"></textarea>
                 </div>
             </div>
             
-            <div class="flex gap-4">
-                <button onclick="saveServer()" class="flex-[2] btn-primary">ثبت اطلاعات</button>
-                <button onclick="closeServerModal()" class="flex-[1] bg-[#27272a] hover:bg-[#3f3f46] text-white font-bold py-4 rounded-2xl transition-colors text-lg">انصراف</button>
+            <div class="flex flex-col sm:flex-row gap-4">
+                <button onclick="saveServer()" class="w-full sm:flex-[2] btn-primary">ثبت اطلاعات</button>
+                <button onclick="closeServerModal()" class="w-full sm:flex-[1] bg-[#27272a] hover:bg-[#3f3f46] text-white font-bold py-4 rounded-[18px] transition-colors text-lg">انصراف</button>
             </div>
         </div>
     </div>
@@ -193,25 +216,39 @@ cat << 'EOF' > panel.html
             }
 
             list.innerHTML = servers.map(s => `
-                <div class="bg-[#18181b] p-5 rounded-3xl flex justify-between items-center border border-[#3f3f46] hover:border-[#c084fc]/50 transition-colors">
-                    <div class="flex items-center gap-4">
-                        <div class="w-12 h-12 rounded-2xl bg-[#c084fc]/10 flex items-center justify-center border border-[#c084fc]/20">
+                <div class="bg-[#18181b] p-5 rounded-3xl flex flex-col md:flex-row gap-5 justify-between items-start md:items-center border border-[#3f3f46] hover:border-[#c084fc]/50 transition-colors w-full overflow-hidden">
+                    <div class="flex items-center gap-4 w-full md:w-auto overflow-hidden">
+                        <div class="min-w-[48px] h-12 rounded-2xl bg-[#c084fc]/10 flex items-center justify-center border border-[#c084fc]/20">
                             <i class="fas fa-network-wired text-[#c084fc] text-xl"></i>
                         </div>
-                        <div>
-                            <div class="font-black text-lg">${s.name || 'بدون نام'}</div>
-                            <div class="text-xs text-gray-400 font-mono mt-1" dir="ltr">${s.host}</div>
+                        <div class="overflow-hidden w-full">
+                            <div class="font-black text-lg truncate">${s.name || 'بدون نام'}</div>
+                            <div class="text-xs text-gray-400 font-mono mt-1 break-all" dir="ltr">${s.host}</div>
                         </div>
                     </div>
-                    <div class="flex items-center gap-4">
-                        ${s.xray_config ? '<span class="bg-green-500/20 text-green-400 border border-green-500/30 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-2"><i class="fas fa-shield-check"></i> تونل فعال</span>' : '<span class="bg-gray-800 text-gray-300 px-3 py-1.5 rounded-xl text-xs font-bold">مستقیم</span>'}
-                        <div class="flex gap-2">
-                            <button onclick="editServer(${s.id})" class="w-10 h-10 rounded-xl bg-blue-500/10 text-blue-400 hover:bg-blue-500 hover:text-white transition-colors flex items-center justify-center"><i class="fas fa-pen"></i></button>
-                            <button onclick="deleteServer(${s.id})" class="w-10 h-10 rounded-xl bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center"><i class="fas fa-trash"></i></button>
+                    <div class="flex flex-wrap items-center gap-4 w-full md:w-auto justify-between md:justify-end mt-2 md:mt-0">
+                        ${s.xray_config ? '<span class="bg-green-500/20 text-green-400 border border-green-500/30 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2"><i class="fas fa-shield-check"></i> تونل فعال</span>' : '<span class="bg-gray-800 text-gray-300 px-3 py-2 rounded-xl text-xs font-bold">مستقیم</span>'}
+                        <div class="flex gap-2 shrink-0">
+                            <button onclick="editServer(${s.id})" class="w-12 h-12 rounded-xl bg-blue-500/10 text-blue-400 hover:bg-blue-500 hover:text-white transition-colors flex items-center justify-center"><i class="fas fa-pen"></i></button>
+                            <button onclick="deleteServer(${s.id})" class="w-12 h-12 rounded-xl bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center"><i class="fas fa-trash"></i></button>
                         </div>
                     </div>
                 </div>
             `).join('');
+        }
+
+        async function openSettingsModal() {
+            const res = await api('/settings');
+            document.getElementById('admin-id-input').value = res.admin_id || '';
+            document.getElementById('settings-modal').classList.remove('hidden');
+        }
+        function closeSettingsModal() { document.getElementById('settings-modal').classList.add('hidden'); }
+        
+        async function saveSettings() {
+            const admin_id = document.getElementById('admin-id-input').value;
+            await api('/settings', {method: 'POST', body: JSON.stringify({admin_id: admin_id})});
+            showToast("تنظیمات ذخیره شد");
+            closeSettingsModal();
         }
 
         function openServerModal(id = null) { 
@@ -267,7 +304,7 @@ cat << 'EOF' > panel.html
 </html>
 EOF
 
-# --- xray_bot.py (ربات دستیار ادمین با کیبورد و دکمه‌های شیشه‌ای اطلاعات) ---
+# --- xray_bot.py ---
 cat << 'EOF' > xray_bot.py
 import telebot
 from telebot import types
@@ -275,19 +312,27 @@ import sqlite3, os, requests, json, urllib3, socket, subprocess, time, urllib.pa
 urllib3.disable_warnings()
 
 BOT_TOKEN = "BOT_TOKEN_PLACEHOLDER"
-ADMIN_ID = ADMIN_ID_PLACEHOLDER
 DB_PATH = "users.db"
 
 bot = telebot.TeleBot(BOT_TOKEN)
-# For holding context when an admin searches a user
 active_targets = {}
-# For holding context during multi-step processes (like extending)
 step_states = {}
 
 def get_db():
     conn = sqlite3.connect(DB_PATH, timeout=20)
     conn.row_factory = sqlite3.Row
     return conn
+
+def get_admin_id():
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT value FROM settings WHERE key='admin_id'")
+    row = c.fetchone()
+    conn.close()
+    if row and row['value']:
+        try: return int(row['value'])
+        except: return None
+    return None
 
 def get_free_port():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -409,9 +454,17 @@ def get_main_reply_keyboard():
     markup.add("❌ حذف اکانت", "🔙 پایان مدیریت")
     return markup
 
+def check_admin(m):
+    admin_id = get_admin_id()
+    if not admin_id or m.chat.id != admin_id:
+        text = f"🔒 **دسترسی غیرمجاز!**\n\nشما ادمین سیستم نیستید یا هنوز تنظیمات پنل تکمیل نشده است.\n\nآیدی عددی تلگرام شما:\n`{m.chat.id}`\n\nلطفاً این آیدی را کپی کرده و در بخش **تنظیمات ربات** در پنل تحت وب UserRenew وارد کنید."
+        bot.reply_to(m, text, parse_mode="Markdown")
+        return False
+    return True
+
 @bot.message_handler(commands=['start'])
 def start(m):
-    if m.chat.id != ADMIN_ID: return
+    if not check_admin(m): return
     active_targets.pop(m.chat.id, None)
     text = "به دستیار هوشمند مدیریت کاربران خوش آمدید! 🤖\n\n"
     text += "لطفاً برای مدیریت اکانت، یکی از موارد زیر را ارسال کنید:\n"
@@ -420,8 +473,9 @@ def start(m):
     text += "🔸 **متن کامل کانفیگ Vless**"
     bot.send_message(m.chat.id, text, parse_mode="Markdown", reply_markup=types.ReplyKeyboardRemove())
 
-@bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID)
+@bot.message_handler(func=lambda m: True)
 def handle_text_messages(m):
+    if not check_admin(m): return
     txt = m.text.strip()
     
     if txt == "🔙 پایان مدیریت" or txt == "لغو":
@@ -430,7 +484,6 @@ def handle_text_messages(m):
         bot.reply_to(m, "عملیات لغو شد. 🔙\nمنتظر دریافت نام کاربری یا کانفیگ جدید هستم...", reply_markup=types.ReplyKeyboardRemove())
         return
 
-    # Check if a target is selected for Actions
     if txt in ["🔄 تمدید اکانت", "⏯ تغییر وضعیت (فعال/غیرفعال)", "❌ حذف اکانت"]:
         target = active_targets.get(m.chat.id)
         if not target:
@@ -456,7 +509,6 @@ def handle_text_messages(m):
             bot.register_next_step_handler(msg, step_days)
         return
 
-    # If it's not a button command, treat it as a SEARCH query
     bot.clear_step_handler_by_chat_id(m.chat.id)
     query = txt
     if "vless://" in txt.lower():
@@ -491,7 +543,6 @@ def handle_text_messages(m):
         show_client_info_and_keyboard(m.chat.id, found[0])
 
 def show_client_info_and_keyboard(chat_id, cl):
-    # Set the active target for the reply keyboard actions
     active_targets[chat_id] = {'sid': cl['server_id'], 'uuid': cl['uuid']}
     
     status = "✅ فعال" if cl['enable'] else "⏸ مسدود (غیرفعال)"
@@ -576,7 +627,7 @@ def ignore_clicks(call): bot.answer_callback_query(call.id, "این دکمه ن�
 bot.infinity_polling()
 EOF
 
-# --- main.py (FastAPI) ---
+# --- main.py ---
 cat << 'EOF' > main.py
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
@@ -597,6 +648,7 @@ def init_db():
     c = conn.cursor()
     c.execute('CREATE TABLE IF NOT EXISTS servers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, host TEXT, user TEXT, password TEXT, xray_config TEXT)')
     c.execute('CREATE TABLE IF NOT EXISTS admin (username TEXT, password TEXT)')
+    c.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
     if c.execute('SELECT count(*) FROM admin').fetchone()[0] == 0:
         c.execute("INSERT INTO admin VALUES ('ADMIN_PLACEHOLDER', 'PASS_PLACEHOLDER')")
     conn.commit(); conn.close()
@@ -604,6 +656,7 @@ init_db()
 
 class LoginModel(BaseModel): username: str; password: str
 class ServerModel(BaseModel): name: str; host: str; user: str; password: str; xray_config: str
+class SettingsModel(BaseModel): admin_id: str
 
 @app.post("/api/login")
 def login(data: LoginModel):
@@ -611,6 +664,21 @@ def login(data: LoginModel):
     c.execute("SELECT * FROM admin WHERE username=? AND password=?", (data.username, data.password))
     valid = c.fetchone() is not None; conn.close()
     return {"success": valid}
+
+@app.get("/api/settings")
+def get_settings():
+    conn = sqlite3.connect(DB_PATH); c = conn.cursor()
+    c.execute("SELECT value FROM settings WHERE key='admin_id'")
+    row = c.fetchone()
+    conn.close()
+    return {"admin_id": row[0] if row else ""}
+
+@app.post("/api/settings")
+def save_settings(s: SettingsModel):
+    conn = sqlite3.connect(DB_PATH); c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_id', ?)", (s.admin_id,))
+    conn.commit(); conn.close()
+    return {"success": True}
 
 @app.get("/api/servers")
 def get_servers():
@@ -643,9 +711,8 @@ def serve_panel():
 if __name__ == "__main__": uvicorn.run(app, host="0.0.0.0", port=PORT_PLACEHOLDER)
 EOF
 
-# جایگذاری مقادیر متغیرها
+# Replace Placeholders
 sed -i "s/BOT_TOKEN_PLACEHOLDER/$BOT_TOKEN/g" xray_bot.py
-sed -i "s/ADMIN_ID_PLACEHOLDER/$ADMIN_ID/g" xray_bot.py
 sed -i "s/PORT_PLACEHOLDER/$PANEL_PORT/g" main.py
 sed -i "s/ADMIN_PLACEHOLDER/$PANEL_USER/g" main.py
 sed -i "s/PASS_PLACEHOLDER/$PANEL_PASS/g" main.py
@@ -654,7 +721,7 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -q telebot "requests[socks]" fastapi uvicorn pydantic
 
-# ایجاد منوی کامل CLI به نام userrenew
+# Create CLI Menu
 cat << 'EOF_MENU' > /usr/bin/userrenew
 #!/bin/bash
 PURPLE="\e[35m"
@@ -731,7 +798,7 @@ done
 EOF_MENU
 chmod +x /usr/bin/userrenew
 
-# ایجاد سرویس‌های لینوکس
+# Systemd Services
 cat << 'EOF_SERVICE' > /etc/systemd/system/userrenew-panel.service
 [Unit]
 Description=UserRenew Panel Web
