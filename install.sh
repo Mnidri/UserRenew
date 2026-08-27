@@ -1,13 +1,14 @@
 #!/bin/bash
 
 # ==========================================
-# UserRenew Panel - Auto Installer
+# UserRenew Panel - Smart Auto Installer
 # ==========================================
 
 GREEN="\e[32m"
 PURPLE="\e[35m"
 RED="\e[31m"
 CYAN="\e[36m"
+YELLOW="\e[33m"
 RESET="\e[0m"
 
 # 1. Check Root
@@ -49,7 +50,7 @@ fi
 mkdir -p /root/UserRenew
 cd /root/UserRenew
 
-# --- panel.html (تم بنفش و مشکی) ---
+# --- panel.html (تم بنفش لایت و ورودی‌های بزرگتر) ---
 cat << 'EOF' > panel.html
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
@@ -61,56 +62,93 @@ cat << 'EOF' > panel.html
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;700;900&display=swap');
-        body { font-family: 'Vazirmatn', sans-serif; background-color: #0f0f11; color: #ffffff; }
-        .glass-panel { background: #1a1a1e; border: 1px solid #2d2d35; border-radius: 24px; padding: 24px; }
-        input, select, textarea { background: #25252b; border: 1px solid #363640; color: white; width: 100%; padding: 16px 18px; border-radius: 16px; margin-top: 6px; outline: none; }
-        input:focus, select:focus, textarea:focus { border-color: #a855f7; }
-        .toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: #a855f7; color: white; padding: 14px 28px; border-radius: 100px; z-index: 1000; opacity: 0; visibility: hidden; transition: 0.4s; }
-        .toast.show { opacity: 1; visibility: visible; }
+        body { font-family: 'Vazirmatn', sans-serif; background-color: #09090b; color: #ffffff; }
+        
+        .glass-panel { background: #18181b; border: 1px solid #27272a; border-radius: 28px; padding: 32px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+        
+        input, select, textarea { 
+            background: #27272a; border: 1px solid #3f3f46; color: white; width: 100%; 
+            padding: 18px 22px; border-radius: 18px; margin-top: 8px; outline: none; 
+            font-size: 1.1rem; transition: all 0.3s ease;
+        }
+        input:focus, select:focus, textarea:focus { border-color: #c084fc; background: #3f3f46; box-shadow: 0 0 0 4px rgba(192,132,252,0.1); }
+        
+        .toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%) translateY(-20px); background: #c084fc; color: black; padding: 16px 32px; border-radius: 100px; z-index: 1000; opacity: 0; visibility: hidden; transition: 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55); font-weight: bold; }
+        .toast.show { opacity: 1; visibility: visible; transform: translateX(-50%) translateY(0); }
+        
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #c084fc; }
+
+        .btn-primary { background: #c084fc; color: #09090b; font-weight: 900; padding: 18px; border-radius: 18px; transition: all 0.3s; width: 100%; font-size: 1.1rem; }
+        .btn-primary:hover { background: #d8b4fe; transform: translateY(-2px); box-shadow: 0 10px 20px rgba(192,132,252,0.2); }
     </style>
 </head>
 <body>
     <div id="toast" class="toast">عملیات موفق</div>
     
     <div id="login-screen" class="min-h-screen flex items-center justify-center p-4">
-        <div class="w-full max-w-sm text-center glass-panel shadow-2xl">
-            <i class="fas fa-fingerprint text-5xl text-[#a855f7] mb-6 block"></i>
-            <h2 class="text-2xl font-black mb-8">ورود به سیستم</h2>
-            <input type="text" id="username" placeholder="نام کاربری" dir="ltr" class="mb-4">
-            <input type="password" id="password" placeholder="رمز عبور" dir="ltr" class="mb-8">
-            <button onclick="login()" class="w-full bg-[#a855f7] hover:bg-[#9333ea] text-white font-black py-4 rounded-2xl">ورود</button>
-        </div>
-    </div>
-
-    <div id="main-app" class="hidden max-w-2xl mx-auto p-4 pt-10">
-        <div class="flex justify-between items-center mb-8 glass-panel !py-4">
-            <div class="text-xl font-black text-[#a855f7]">UserRenew Manager</div>
-            <button onclick="logout()" class="text-gray-400 hover:text-white"><i class="fas fa-power-off text-xl"></i></button>
-        </div>
-
-        <div class="glass-panel space-y-5">
-            <div class="flex justify-between items-center mb-4">
-                <h3 class="text-lg font-bold"><i class="fas fa-server ml-2 text-[#a855f7]"></i>مدیریت سرورها</h3>
-                <button onclick="openServerModal()" class="bg-[#a855f7]/20 text-[#a855f7] px-4 py-2 rounded-xl text-sm font-bold border border-[#a855f7]/30"><i class="fas fa-plus"></i> افزودن</button>
+        <div class="w-full max-w-md text-center glass-panel">
+            <div class="w-24 h-24 rounded-full bg-[#c084fc]/10 flex items-center justify-center mx-auto mb-6 border border-[#c084fc]/30">
+                <i class="fas fa-fingerprint text-5xl text-[#c084fc]"></i>
             </div>
-            <div id="servers-list" class="space-y-4"></div>
+            <h2 class="text-3xl font-black mb-10">ورود به سیستم</h2>
+            <input type="text" id="username" placeholder="نام کاربری" dir="ltr" class="mb-5 text-center text-xl">
+            <input type="password" id="password" placeholder="رمز عبور" dir="ltr" class="mb-10 text-center text-xl">
+            <button onclick="login()" class="btn-primary">تایید و ورود</button>
         </div>
     </div>
 
-    <div id="server-modal" class="fixed inset-0 bg-black/90 hidden z-[100] flex items-center justify-center p-4">
-        <div class="w-full max-w-sm glass-panel">
-            <h3 class="text-xl font-black mb-6 text-[#a855f7]" id="server-modal-title">افزودن سرور</h3>
+    <div id="main-app" class="hidden max-w-3xl mx-auto p-4 pt-12 pb-24">
+        <div class="flex justify-between items-center mb-10 glass-panel !py-5 !px-8">
+            <div class="text-2xl font-black text-[#c084fc] flex items-center"><i class="fas fa-bolt ml-3"></i> UserRenew</div>
+            <button onclick="logout()" class="w-12 h-12 rounded-full bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center"><i class="fas fa-power-off text-xl"></i></button>
+        </div>
+
+        <div class="glass-panel">
+            <div class="flex justify-between items-center mb-8 border-b border-[#27272a] pb-6">
+                <h3 class="text-xl font-bold flex items-center"><i class="fas fa-server ml-3 text-[#c084fc] text-2xl"></i>سرورهای متصل</h3>
+                <button onclick="openServerModal()" class="bg-[#c084fc]/20 text-[#c084fc] hover:bg-[#c084fc] hover:text-black transition-all px-6 py-3 rounded-2xl text-md font-bold border border-[#c084fc]/30 flex items-center"><i class="fas fa-plus ml-2"></i> افزودن سرور</button>
+            </div>
+            
+            <div id="servers-list" class="space-y-4 max-h-[500px] overflow-y-auto pr-2"></div>
+        </div>
+    </div>
+
+    <div id="server-modal" class="fixed inset-0 bg-black/95 hidden z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
+        <div class="w-full max-w-lg glass-panel">
+            <h3 class="text-2xl font-black mb-8 text-[#c084fc] flex items-center" id="server-modal-title"><i class="fas fa-server ml-3"></i> افزودن سرور جدید</h3>
             <input type="hidden" id="srv-id">
-            <input type="text" id="srv-name" placeholder="نام نمایشی" class="mb-3">
-            <input type="text" id="srv-host" placeholder="آدرس (https://...:port)" dir="ltr" class="mb-3">
-            <div class="grid grid-cols-2 gap-3 mb-3">
-                <input type="text" id="srv-user" placeholder="یوزر" dir="ltr">
-                <input type="password" id="srv-pass" placeholder="پسورد" dir="ltr">
+            
+            <div class="space-y-4 mb-8">
+                <div>
+                    <label class="text-sm font-bold text-gray-400 ml-2">نام نمایشی</label>
+                    <input type="text" id="srv-name" placeholder="مثال: سرور آلمان">
+                </div>
+                <div>
+                    <label class="text-sm font-bold text-gray-400 ml-2">آدرس پنل (شامل پورت)</label>
+                    <input type="text" id="srv-host" placeholder="https://ip:port/path" dir="ltr">
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="text-sm font-bold text-gray-400 ml-2">نام کاربری پنل</label>
+                        <input type="text" id="srv-user" placeholder="admin" dir="ltr">
+                    </div>
+                    <div>
+                        <label class="text-sm font-bold text-gray-400 ml-2">رمز عبور پنل</label>
+                        <input type="password" id="srv-pass" placeholder="***" dir="ltr">
+                    </div>
+                </div>
+                <div>
+                    <label class="text-sm font-bold text-gray-400 ml-2">مسیر امن Vless (جهت دور زدن فیلترینگ)</label>
+                    <textarea id="srv-xray" rows="3" placeholder="vless://..." dir="ltr" class="text-sm font-mono"></textarea>
+                </div>
             </div>
-            <textarea id="srv-xray" rows="3" placeholder="vless://... (کانفیگ امن سرور)" dir="ltr" class="mb-6"></textarea>
-            <div class="flex gap-3">
-                <button onclick="saveServer()" class="flex-[2] bg-[#a855f7] text-white font-bold py-3 rounded-xl">ذخیره</button>
-                <button onclick="closeServerModal()" class="flex-[1] bg-gray-700 text-white font-bold py-3 rounded-xl">بستن</button>
+            
+            <div class="flex gap-4">
+                <button onclick="saveServer()" class="flex-[2] btn-primary">ثبت اطلاعات</button>
+                <button onclick="closeServerModal()" class="flex-[1] bg-[#27272a] hover:bg-[#3f3f46] text-white font-bold py-4 rounded-2xl transition-colors text-lg">انصراف</button>
             </div>
         </div>
     </div>
@@ -133,7 +171,7 @@ cat << 'EOF' > panel.html
             const u = document.getElementById('username').value, p = document.getElementById('password').value;
             const res = await api('/login', { method: 'POST', body: JSON.stringify({username: u, password: p}) });
             if (res.success) { localStorage.setItem('logged_in', 'true'); showApp(); }
-            else showToast("اطلاعات اشتباه است");
+            else showToast("اطلاعات ورود اشتباه است");
         }
 
         function logout() { localStorage.clear(); location.reload(); }
@@ -146,38 +184,90 @@ cat << 'EOF' > panel.html
 
         async function fetchServers() {
             const servers = await api('/servers');
-            document.getElementById('servers-list').innerHTML = servers.map(s => `
-                <div class="bg-[#25252b] p-4 rounded-2xl flex justify-between items-center border border-[#363640]">
-                    <div>
-                        <div class="font-bold">${s.name || 'بدون نام'}</div>
-                        <div class="text-xs text-gray-400 font-mono" dir="ltr">${s.host}</div>
+            window.serversData = servers;
+            const list = document.getElementById('servers-list');
+            
+            if(servers.length === 0) {
+                list.innerHTML = '<div class="text-center text-gray-500 py-10 font-bold">هیچ سروری ثبت نشده است.</div>';
+                return;
+            }
+
+            list.innerHTML = servers.map(s => `
+                <div class="bg-[#18181b] p-5 rounded-3xl flex justify-between items-center border border-[#3f3f46] hover:border-[#c084fc]/50 transition-colors">
+                    <div class="flex items-center gap-4">
+                        <div class="w-12 h-12 rounded-2xl bg-[#c084fc]/10 flex items-center justify-center border border-[#c084fc]/20">
+                            <i class="fas fa-network-wired text-[#c084fc] text-xl"></i>
+                        </div>
+                        <div>
+                            <div class="font-black text-lg">${s.name || 'بدون نام'}</div>
+                            <div class="text-xs text-gray-400 font-mono mt-1" dir="ltr">${s.host}</div>
+                        </div>
                     </div>
-                    <button onclick="deleteServer(${s.id})" class="text-red-400 hover:text-red-500 bg-red-400/10 p-2 rounded-lg"><i class="fas fa-trash"></i></button>
+                    <div class="flex items-center gap-4">
+                        ${s.xray_config ? '<span class="bg-green-500/20 text-green-400 border border-green-500/30 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-2"><i class="fas fa-shield-check"></i> تونل فعال</span>' : '<span class="bg-gray-800 text-gray-300 px-3 py-1.5 rounded-xl text-xs font-bold">مستقیم</span>'}
+                        <div class="flex gap-2">
+                            <button onclick="editServer(${s.id})" class="w-10 h-10 rounded-xl bg-blue-500/10 text-blue-400 hover:bg-blue-500 hover:text-white transition-colors flex items-center justify-center"><i class="fas fa-pen"></i></button>
+                            <button onclick="deleteServer(${s.id})" class="w-10 h-10 rounded-xl bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center"><i class="fas fa-trash"></i></button>
+                        </div>
+                    </div>
                 </div>
             `).join('');
         }
 
-        function openServerModal() { document.getElementById('server-modal').classList.remove('hidden'); }
+        function openServerModal(id = null) { 
+            const title = document.getElementById('server-modal-title');
+            if (id) {
+                const s = window.serversData.find(x => x.id === id);
+                document.getElementById('srv-id').value = s.id;
+                document.getElementById('srv-name').value = s.name;
+                document.getElementById('srv-host').value = s.host;
+                document.getElementById('srv-user').value = s.user;
+                document.getElementById('srv-pass').value = s.password;
+                document.getElementById('srv-xray').value = s.xray_config;
+                title.innerHTML = '<i class="fas fa-pen ml-3"></i> ویرایش سرور';
+            } else {
+                document.getElementById('srv-id').value = '';
+                document.getElementById('srv-name').value = '';
+                document.getElementById('srv-host').value = '';
+                document.getElementById('srv-user').value = '';
+                document.getElementById('srv-pass').value = '';
+                document.getElementById('srv-xray').value = '';
+                title.innerHTML = '<i class="fas fa-server ml-3"></i> افزودن سرور جدید';
+            }
+            document.getElementById('server-modal').classList.remove('hidden'); 
+        }
+
+        function editServer(id) { openServerModal(id); }
         function closeServerModal() { document.getElementById('server-modal').classList.add('hidden'); }
 
         async function saveServer() {
+            const id = document.getElementById('srv-id').value;
             const data = {
                 name: document.getElementById('srv-name').value, host: document.getElementById('srv-host').value,
                 user: document.getElementById('srv-user').value, password: document.getElementById('srv-pass').value,
                 xray_config: document.getElementById('srv-xray').value
             };
-            await api('/servers', {method: 'POST', body: JSON.stringify(data)});
-            closeServerModal(); fetchServers(); showToast('سرور ذخیره شد');
+            if(!data.host || !data.user || !data.password) return showToast("فیلدهای ضروری را پر کنید!");
+            
+            if (id) {
+                await api('/servers/'+id, {method: 'PUT', body: JSON.stringify(data)});
+                showToast('سرور با موفقیت ویرایش شد');
+            } else {
+                await api('/servers', {method: 'POST', body: JSON.stringify(data)});
+                showToast('سرور جدید اضافه شد');
+            }
+            closeServerModal(); fetchServers(); 
         }
+        
         async function deleteServer(id) {
-            if(confirm('حذف شود؟')) { await api('/servers/'+id, {method:'DELETE'}); fetchServers(); }
+            if(confirm('آیا از حذف این سرور اطمینان دارید؟')) { await api('/servers/'+id, {method:'DELETE'}); fetchServers(); }
         }
     </script>
 </body>
 </html>
 EOF
 
-# --- xray_bot.py (ربات دستیار ادمین) ---
+# --- xray_bot.py (ربات دستیار ادمین با کیبورد و دکمه‌های شیشه‌ای اطلاعات) ---
 cat << 'EOF' > xray_bot.py
 import telebot
 from telebot import types
@@ -189,7 +279,10 @@ ADMIN_ID = ADMIN_ID_PLACEHOLDER
 DB_PATH = "users.db"
 
 bot = telebot.TeleBot(BOT_TOKEN)
-user_states = {}
+# For holding context when an admin searches a user
+active_targets = {}
+# For holding context during multi-step processes (like extending)
+step_states = {}
 
 def get_db():
     conn = sqlite3.connect(DB_PATH, timeout=20)
@@ -272,30 +365,27 @@ def perform_action(server_id, uuid, action, **kwargs):
         s = requests.Session(); s.verify = False
         try:
             s.post(f"{url}/login", data={"username": srv['user'], "password": srv['password']}, proxies=proxies, timeout=10)
-            
-            # Find Inbound ID and Client Data
             inbounds = s.get(f"{url}/panel/api/inbounds/list", proxies=proxies, timeout=10).json().get("obj", [])
             target_inb, target_client = None, None
             for ib in inbounds:
                 settings = json.loads(ib.get('settings', '{}'))
                 for cl in settings.get('clients', []):
                     if cl.get('id') == uuid:
-                        target_inb = ib['id']
-                        target_client = cl
-                        break
+                        target_inb = ib['id']; target_client = cl; break
                 if target_inb: break
             
             if not target_inb: return False, "کلاینت در سرور یافت نشد"
 
             if action == "delete":
                 res = s.post(f"{url}/panel/api/inbounds/{target_inb}/delClient/{uuid}", proxies=proxies, timeout=10)
-                return res.json().get('success', False), "حذف شد"
+                return res.json().get('success', False), "کانفیگ با موفقیت حذف شد. 🗑"
                 
-            elif action == "disable":
-                target_client['enable'] = False
+            elif action == "toggle":
+                target_client['enable'] = not target_client['enable']
                 payload = {"id": target_inb, "settings": json.dumps({"clients": [target_client]})}
                 res = s.post(f"{url}/panel/api/inbounds/updateClient/{uuid}", json=payload, proxies=proxies, timeout=10)
-                return res.json().get('success', False), "غیرفعال شد"
+                state_msg = "فعال ✅" if target_client['enable'] else "غیرفعال ⏸"
+                return res.json().get('success', False), f"وضعیت اکانت با موفقیت تغییر کرد و اکنون **{state_msg}** است."
 
             elif action == "extend":
                 days, gb = kwargs['days'], kwargs['gb']
@@ -308,27 +398,72 @@ def perform_action(server_id, uuid, action, **kwargs):
                 
                 if res.json().get('success'):
                     s.post(f"{url}/panel/api/inbounds/{target_inb}/resetClientTraffic/{target_client['email']}", proxies=proxies, timeout=10)
-                    return True, "تمدید و ریست حجم با موفقیت انجام شد"
-                return False, "خطا در تمدید"
+                    return True, "✅ **اکانت با موفقیت تمدید و حجم آن ریست شد.**"
+                return False, "❌ خطا در برقراری ارتباط برای تمدید."
                 
-        except Exception as e: return False, str(e)
+        except Exception as e: return False, f"خطا: {str(e)}"
+
+def get_main_reply_keyboard():
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    markup.add("🔄 تمدید اکانت", "⏯ تغییر وضعیت (فعال/غیرفعال)")
+    markup.add("❌ حذف اکانت", "🔙 پایان مدیریت")
+    return markup
 
 @bot.message_handler(commands=['start'])
 def start(m):
     if m.chat.id != ADMIN_ID: return
-    bot.reply_to(m, "👋 سلام ادمین عزیز!\nبرای مدیریت کاربر، کافیه **نام کاربری (Email)** یا **کانفیگ Vless** کاربر رو بفرستی.", parse_mode="Markdown")
+    active_targets.pop(m.chat.id, None)
+    text = "به دستیار هوشمند مدیریت کاربران خوش آمدید! 🤖\n\n"
+    text += "لطفاً برای مدیریت اکانت، یکی از موارد زیر را ارسال کنید:\n"
+    text += "🔸 **نام کاربری (Email)**\n"
+    text += "🔸 **UUID کلاینت**\n"
+    text += "🔸 **متن کامل کانفیگ Vless**"
+    bot.send_message(m.chat.id, text, parse_mode="Markdown", reply_markup=types.ReplyKeyboardRemove())
 
 @bot.message_handler(func=lambda m: m.chat.id == ADMIN_ID)
-def search_client(m):
+def handle_text_messages(m):
     txt = m.text.strip()
-    bot.clear_step_handler_by_chat_id(m.chat.id)
     
+    if txt == "🔙 پایان مدیریت" or txt == "لغو":
+        active_targets.pop(m.chat.id, None)
+        bot.clear_step_handler_by_chat_id(m.chat.id)
+        bot.reply_to(m, "عملیات لغو شد. 🔙\nمنتظر دریافت نام کاربری یا کانفیگ جدید هستم...", reply_markup=types.ReplyKeyboardRemove())
+        return
+
+    # Check if a target is selected for Actions
+    if txt in ["🔄 تمدید اکانت", "⏯ تغییر وضعیت (فعال/غیرفعال)", "❌ حذف اکانت"]:
+        target = active_targets.get(m.chat.id)
+        if not target:
+            bot.reply_to(m, "⚠️ هیچ اکانتی انتخاب نشده است! لطفاً ابتدا یک کانفیگ جستجو کنید.", reply_markup=types.ReplyKeyboardRemove())
+            return
+            
+        if txt == "❌ حذف اکانت":
+            wait = bot.send_message(m.chat.id, "⏳ در حال حذف اکانت...")
+            ok, msg = perform_action(target['sid'], target['uuid'], "delete")
+            bot.delete_message(m.chat.id, wait.message_id)
+            bot.send_message(m.chat.id, msg, reply_markup=types.ReplyKeyboardRemove())
+            active_targets.pop(m.chat.id, None)
+            
+        elif txt == "⏯ تغییر وضعیت (فعال/غیرفعال)":
+            wait = bot.send_message(m.chat.id, "⏳ در حال تغییر وضعیت...")
+            ok, msg = perform_action(target['sid'], target['uuid'], "toggle")
+            bot.delete_message(m.chat.id, wait.message_id)
+            bot.send_message(m.chat.id, msg, parse_mode="Markdown")
+            
+        elif txt == "🔄 تمدید اکانت":
+            step_states[m.chat.id] = {'sid': target['sid'], 'uuid': target['uuid']}
+            msg = bot.send_message(m.chat.id, "🔄 **مرحله ۱ از ۲ (تمدید):**\n\nلطفاً **تعداد روز** مورد نظر برای تمدید را بصورت عدد لاتین وارد کنید:\n(برای لغو، کلمه 'لغو' را بفرستید)", parse_mode="Markdown", reply_markup=types.ReplyKeyboardRemove())
+            bot.register_next_step_handler(msg, step_days)
+        return
+
+    # If it's not a button command, treat it as a SEARCH query
+    bot.clear_step_handler_by_chat_id(m.chat.id)
     query = txt
     if "vless://" in txt.lower():
         try: query = urllib.parse.urlparse("vless://" + txt.split("://")[-1]).username
         except: pass
 
-    msg = bot.reply_to(m, "⏳ در حال جستجوی اکانت در تمامی سرورها...")
+    msg_wait = bot.reply_to(m, "⏳ در حال جستجوی جامع در تمامی سرورها...", reply_markup=types.ReplyKeyboardRemove())
     
     conn = get_db(); c = conn.cursor()
     c.execute("SELECT * FROM servers")
@@ -341,90 +476,102 @@ def search_client(m):
             if query == cl['uuid'] or query.lower() == cl['email'].lower():
                 found.append(cl)
     
-    bot.delete_message(m.chat.id, msg.message_id)
+    bot.delete_message(m.chat.id, msg_wait.message_id)
     
     if not found:
-        bot.send_message(m.chat.id, "❌ اکانتی با این مشخصات یافت نشد!")
+        bot.send_message(m.chat.id, "❌ متأسفانه کانفیگی با این مشخصات در هیچ سروری یافت نشد!")
         return
 
     if len(found) > 1:
         markup = types.InlineKeyboardMarkup(row_width=1)
         for cl in found:
-            markup.add(types.InlineKeyboardButton(f"سـرور: {cl['server_name']} | یوزر: {cl['email']}", callback_data=f"select_{cl['server_id']}_{cl['uuid']}"))
-        bot.send_message(m.chat.id, "⚠️ این نام در چند سرور پیدا شد. لطفاً سرور مورد نظر را انتخاب کنید:", reply_markup=markup)
+            markup.add(types.InlineKeyboardButton(f"سـرور: {cl['server_name']} | یوزر: {cl['email']}", callback_data=f"sel_{cl['server_id']}_{cl['uuid']}"))
+        bot.send_message(m.chat.id, "⚠️ **نتیجه جستجو در چند سرور یافت شد!**\nلطفاً سرور هدف را از لیست زیر انتخاب کنید:", reply_markup=markup, parse_mode="Markdown")
     else:
-        show_client_menu(m.chat.id, found[0])
+        show_client_info_and_keyboard(m.chat.id, found[0])
 
-def show_client_menu(chat_id, cl):
-    status = "✅ فعال" if cl['enable'] else "⏸ غیرفعال"
+def show_client_info_and_keyboard(chat_id, cl):
+    # Set the active target for the reply keyboard actions
+    active_targets[chat_id] = {'sid': cl['server_id'], 'uuid': cl['uuid']}
+    
+    status = "✅ فعال" if cl['enable'] else "⏸ مسدود (غیرفعال)"
     used = (cl['up'] + cl['down']) / (1024**3)
     total = cl['total'] / (1024**3) if cl['total'] > 0 else 0
-    t_left = (cl['expiry'] - (time.time() * 1000)) / (24*3600*1000) if cl['expiry'] > 0 else 0
     
-    text = f"👤 **کاربر:** `{cl['email']}`\n"
-    text += f"🖥 **سرور:** {cl['server_name']}\n"
-    text += f"وضعیت: {status}\n"
-    text += f"حجم: {used:.2f} GB / {'نامحدود' if total==0 else f'{total:.2f} GB'}\n"
-    text += f"اعتبار: {'نامحدود' if cl['expiry']==0 else f'{t_left:.1f} روز'}"
+    if cl['expiry'] == 0: exp_str = "♾ نامحدود"
+    else:
+        t_left = (cl['expiry'] - (time.time() * 1000)) / (24*3600*1000)
+        exp_str = f"{t_left:.1f} روز" if t_left > 0 else "❌ پایان یافته"
 
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("🔄 تمدید اکانت", callback_data=f"ext_{cl['server_id']}_{cl['uuid']}"),
-        types.InlineKeyboardButton("⏸ غیرفعال‌سازی", callback_data=f"dis_{cl['server_id']}_{cl['uuid']}")
+        types.InlineKeyboardButton(f"👤 کاربر: {cl['email']}", callback_data="ignore"),
+        types.InlineKeyboardButton(f"🖥 سرور: {cl['server_name']}", callback_data="ignore")
     )
-    markup.add(types.InlineKeyboardButton("❌ حذف کامل اکانت", callback_data=f"del_{cl['server_id']}_{cl['uuid']}"))
+    markup.add(
+        types.InlineKeyboardButton(f"📦 حجم کل: {'♾' if total==0 else f'{total:.1f} GB'}", callback_data="ignore"),
+        types.InlineKeyboardButton(f"📉 مصرفی: {used:.2f} GB", callback_data="ignore")
+    )
+    markup.add(
+        types.InlineKeyboardButton(f"⏳ اعتبار: {exp_str}", callback_data="ignore"),
+        types.InlineKeyboardButton(f"وضعیت: {status}", callback_data="ignore")
+    )
     
-    bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+    bot.send_message(chat_id, "🔍 **اطلاعات اکانت پیدا شد:**\nاز منوی پایین عملیات مورد نظر را انتخاب کنید 👇", reply_markup=get_main_reply_keyboard(), parse_mode="Markdown")
+    bot.send_message(chat_id, "📊 **جزئیات دقیق:**", reply_markup=markup, parse_mode="Markdown")
 
-@bot.callback_query_handler(func=lambda c: True)
-def callbacks(call):
+@bot.callback_query_handler(func=lambda c: c.data.startswith('sel_'))
+def handle_select_server(call):
+    bot.delete_message(call.message.chat.id, call.message.message_id)
     data = call.data.split('_')
-    action, sid, uuid = data[0], int(data[1]), data[2]
+    sid, uuid = int(data[1]), data[2]
     
-    if action == "select":
-        bot.delete_message(call.message.chat.id, call.message.message_id)
-        conn = get_db(); cr = conn.cursor()
-        cr.execute("SELECT * FROM servers WHERE id=?", (sid,))
-        srv = cr.fetchone(); conn.close()
+    conn = get_db(); cr = conn.cursor()
+    cr.execute("SELECT * FROM servers WHERE id=?", (sid,))
+    srv = cr.fetchone(); conn.close()
+    if srv:
         for cl in fetch_clients(dict(srv)):
             if cl['uuid'] == uuid:
-                show_client_menu(call.message.chat.id, cl)
-                break
-                
-    elif action == "del":
-        ok, msg = perform_action(sid, uuid, "delete")
-        bot.answer_callback_query(call.id, msg, show_alert=True)
-        if ok: bot.delete_message(call.message.chat.id, call.message.message_id)
-        
-    elif action == "dis":
-        ok, msg = perform_action(sid, uuid, "disable")
-        bot.answer_callback_query(call.id, msg, show_alert=True)
+                show_client_info_and_keyboard(call.message.chat.id, cl)
+                return
+    bot.send_message(call.message.chat.id, "❌ خطا در دریافت اطلاعات. لطفاً مجدداً جستجو کنید.")
 
-    elif action == "ext":
-        user_states[call.message.chat.id] = {'sid': sid, 'uuid': uuid}
-        msg = bot.send_message(call.message.chat.id, "🔄 **مرحله ۱ از ۲:**\nتعداد **روز** برای تمدید را بصورت عدد وارد کنید:", parse_mode="Markdown")
-        bot.register_next_step_handler(msg, get_days)
-
-def get_days(m):
-    if not m.text.isdigit():
-        bot.reply_to(m, "❌ لطفاً فقط عدد وارد کنید. عملیات لغو شد.")
-        return
-    user_states[m.chat.id]['days'] = int(m.text)
-    msg = bot.send_message(m.chat.id, "📊 **مرحله ۲ از ۲:**\nمقدار **حجم (گیگابایت)** را وارد کنید:", parse_mode="Markdown")
-    bot.register_next_step_handler(msg, get_gb)
-
-def get_gb(m):
-    if not m.text.isdigit():
-        bot.reply_to(m, "❌ لطفاً فقط عدد وارد کنید. عملیات لغو شد.")
-        return
-    st = user_states[m.chat.id]
-    days, gb = st['days'], int(m.text)
+def step_days(m):
+    txt = m.text.strip()
+    if txt == "لغو" or txt == "🔙 پایان مدیریت": return handle_text_messages(m)
     
-    wait = bot.send_message(m.chat.id, "⏳ در حال اعمال تغییرات در سرور...")
-    ok, msg = perform_action(st['sid'], st['uuid'], "extend", days=days, gb=gb)
+    if not txt.isdigit():
+        msg = bot.reply_to(m, "❌ لطفاً فقط **عدد** وارد کنید.\nتعداد روز را مجدد وارد کنید:")
+        bot.register_next_step_handler(msg, step_days)
+        return
+        
+    step_states[m.chat.id]['days'] = int(txt)
+    msg = bot.send_message(m.chat.id, "📊 **مرحله ۲ از ۲ (تمدید):**\n\nلطفاً مقدار **حجم (گیگابایت)** را بصورت عدد وارد کنید:\n(برای لغو، کلمه 'لغو' را بفرستید)", parse_mode="Markdown")
+    bot.register_next_step_handler(msg, step_gb)
+
+def step_gb(m):
+    txt = m.text.strip()
+    if txt == "لغو" or txt == "🔙 پایان مدیریت": return handle_text_messages(m)
+    
+    if not txt.isdigit():
+        msg = bot.reply_to(m, "❌ لطفاً فقط **عدد** وارد کنید.\nمقدار حجم را مجدد وارد کنید:")
+        bot.register_next_step_handler(msg, step_gb)
+        return
+        
+    st = step_states.get(m.chat.id)
+    if not st: return
+    
+    days, gb = st['days'], int(txt)
+    wait = bot.send_message(m.chat.id, "⏳ در حال اعمال تغییرات در سرور لینوکس...")
+    
+    ok, msg_resp = perform_action(st['sid'], st['uuid'], "extend", days=days, gb=gb)
     
     bot.delete_message(m.chat.id, wait.message_id)
-    bot.send_message(m.chat.id, f"✅ نتیجه عملیات:\n{msg}")
+    bot.send_message(m.chat.id, msg_resp, parse_mode="Markdown", reply_markup=get_main_reply_keyboard())
+    step_states.pop(m.chat.id, None)
+
+@bot.callback_query_handler(func=lambda c: c.data == "ignore")
+def ignore_clicks(call): bot.answer_callback_query(call.id, "این دکمه نمایشی است 📊")
 
 bot.infinity_polling()
 EOF
@@ -477,6 +624,12 @@ def add_server(s: ServerModel):
     c.execute("INSERT INTO servers (name, host, user, password, xray_config) VALUES (?, ?, ?, ?, ?)", (s.name, s.host, s.user, s.password, s.xray_config))
     conn.commit(); conn.close(); return {"success": True}
 
+@app.put("/api/servers/{server_id}")
+def edit_server(server_id: int, s: ServerModel):
+    conn = sqlite3.connect(DB_PATH); c = conn.cursor()
+    c.execute("UPDATE servers SET name=?, host=?, user=?, password=?, xray_config=? WHERE id=?", (s.name, s.host, s.user, s.password, s.xray_config, server_id))
+    conn.commit(); conn.close(); return {"success": True}
+
 @app.delete("/api/servers/{server_id}")
 def del_server(server_id: int):
     conn = sqlite3.connect(DB_PATH); c = conn.cursor()
@@ -501,27 +654,78 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -q telebot "requests[socks]" fastapi uvicorn pydantic
 
-# ایجاد منوی CLI به نام userrenew
+# ایجاد منوی کامل CLI به نام userrenew
 cat << 'EOF_MENU' > /usr/bin/userrenew
 #!/bin/bash
 PURPLE="\e[35m"
 GREEN="\e[32m"
 RED="\e[31m"
+CYAN="\e[36m"
+YELLOW="\e[33m"
 RESET="\e[0m"
+
+change_token() {
+    read -p "Enter New Bot Token: " new_token
+    sed -i "s/BOT_TOKEN = \".*\"/BOT_TOKEN = \"$new_token\"/g" /root/UserRenew/xray_bot.py
+    systemctl restart userrenew-bot
+    echo -e "${GREEN}[+] Bot token updated successfully!${RESET}"
+    sleep 2
+}
+
+change_port() {
+    read -p "Enter New Panel Port: " new_port
+    sed -i "s/port=[0-9]*/port=$new_port/g" /root/UserRenew/main.py
+    systemctl restart userrenew-panel
+    echo -e "${GREEN}[+] Panel port updated to $new_port successfully!${RESET}"
+    sleep 2
+}
+
+change_creds() {
+    read -p "Enter New Admin Username: " new_user
+    read -p "Enter New Admin Password: " new_pass
+    safe_user=$(echo "$new_user" | sed "s/'/''/g")
+    safe_pass=$(echo "$new_pass" | sed "s/'/''/g")
+    sqlite3 /root/UserRenew/users.db "UPDATE admin SET username='$safe_user', password='$safe_pass';"
+    echo -e "${GREEN}[+] Admin credentials updated successfully!${RESET}"
+    sleep 2
+}
+
+uninstall_all() {
+    echo -e "${RED}[!] WARNING: This will delete everything (including database).${RESET}"
+    read -p "Are you sure? (y/n): " confirm
+    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+        systemctl stop userrenew-panel userrenew-bot
+        systemctl disable userrenew-panel userrenew-bot
+        rm -f /etc/systemd/system/userrenew-*
+        systemctl daemon-reload
+        rm -rf /root/UserRenew
+        rm -f /usr/bin/userrenew
+        echo -e "${GREEN}[+] UserRenew completely uninstalled.${RESET}"
+        exit 0
+    fi
+}
 
 while true; do
     clear
-    echo -e "${PURPLE}=======================================${RESET}"
-    echo -e "       UserRenew Admin Menu            "
-    echo -e "${PURPLE}=======================================${RESET}"
-    echo "1. Restart Services"
-    echo "2. Uninstall System"
-    echo "3. Exit"
-    read -p "Select option: " opt
-    case $opt in
-        1) systemctl restart userrenew-panel userrenew-bot && echo -e "${GREEN}Restarted!${RESET}" && sleep 2 ;;
-        2) systemctl stop userrenew-panel userrenew-bot; rm -rf /root/UserRenew /etc/systemd/system/userrenew-*.service /usr/bin/userrenew; systemctl daemon-reload; echo -e "${RED}Uninstalled!${RESET}"; exit 0 ;;
-        3) exit 0 ;;
+    echo -e "${CYAN}====================================================${RESET}"
+    echo -e "${PURPLE}             UserRenew Management                   ${RESET}"
+    echo -e "${CYAN}====================================================${RESET}"
+    echo -e "1. ${YELLOW}Change Telegram Bot Token${RESET}"
+    echo -e "2. ${YELLOW}Change Panel Web Port${RESET}"
+    echo -e "3. ${YELLOW}Change Panel Username & Password${RESET}"
+    echo -e "4. ${GREEN}Restart Services${RESET}"
+    echo -e "5. ${RED}Uninstall Entire System${RESET}"
+    echo -e "6. Exit"
+    echo -e "${CYAN}====================================================${RESET}"
+    read -p "Select an option [1-6]: " choice
+    case $choice in
+        1) change_token ;;
+        2) change_port ;;
+        3) change_creds ;;
+        4) systemctl restart userrenew-panel userrenew-bot && echo -e "${GREEN}[+] Services Restarted!${RESET}" && sleep 2 ;;
+        5) uninstall_all ;;
+        6) exit 0 ;;
+        *) echo -e "${RED}Invalid option!${RESET}" && sleep 1 ;;
     esac
 done
 EOF_MENU
@@ -561,5 +765,6 @@ IPV4=$(curl -4 -s icanhazip.com || curl -s -4 ifconfig.me)
 echo -e "${GREEN}====================================================${RESET}"
 echo -e "${GREEN}   Installation Completed Successfully!             ${RESET}"
 echo -e "${PURPLE}[+] Panel URL:${RESET} http://$IPV4:$PANEL_PORT"
+echo -e "${PURPLE}[+] Admin Username:${RESET} $PANEL_USER"
 echo -e "${PURPLE}[+] Type ${GREEN}userrenew${PURPLE} in terminal for CLI menu.${RESET}"
 echo -e "${GREEN}====================================================${RESET}"
