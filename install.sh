@@ -115,7 +115,6 @@ cat << 'EOF' > panel.html
         </div>
     </div>
 
-    <!-- Modal تنظیمات ربات -->
     <div id="settings-modal" class="fixed inset-0 bg-black/95 hidden z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
         <div class="w-full max-w-md glass-panel relative">
             <button onclick="closeSettingsModal()" class="absolute top-6 left-6 text-gray-400 hover:text-white"><i class="fas fa-times text-xl"></i></button>
@@ -131,7 +130,6 @@ cat << 'EOF' > panel.html
         </div>
     </div>
 
-    <!-- Modal سرور -->
     <div id="server-modal" class="fixed inset-0 bg-black/95 hidden z-[100] flex flex-col items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
         <div class="w-full max-w-lg glass-panel my-auto">
             <h3 class="text-2xl font-black mb-8 text-[#c084fc] flex items-center" id="server-modal-title"><i class="fas fa-server ml-3"></i> افزودن سرور جدید</h3>
@@ -266,7 +264,6 @@ cat << 'EOF' > panel.html
             }
             document.getElementById('server-modal').classList.remove('hidden'); 
         }
-
         function editServer(id) { openServerModal(id); }
         function closeServerModal() { document.getElementById('server-modal').classList.add('hidden'); }
 
@@ -288,7 +285,6 @@ cat << 'EOF' > panel.html
             }
             closeServerModal(); fetchServers(); 
         }
-        
         async function deleteServer(id) {
             if(confirm('آیا از حذف این سرور اطمینان دارید؟')) { await api('/servers/'+id, {method:'DELETE'}); fetchServers(); }
         }
@@ -308,9 +304,18 @@ BOT_TOKEN = "BOT_TOKEN_PLACEHOLDER"
 DB_PATH = "users.db"
 bot = telebot.TeleBot(BOT_TOKEN)
 
+# User-Agent for bypassing CF / 403 Forbidden
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+
 active_targets = {}
 step_states = {}
 create_states = {}
+
+def get_session():
+    s = requests.Session()
+    s.verify = False
+    s.headers.update({"User-Agent": USER_AGENT})
+    return s
 
 def get_db():
     conn = sqlite3.connect(DB_PATH, timeout=20)
@@ -368,9 +373,16 @@ def fetch_clients(server):
     if not url.startswith("http"): url = "https://" + url
     with XrayTunnel(server['xray_config']) as pxy:
         proxies = {"http": pxy, "https": pxy} if pxy else None
-        s = requests.Session(); s.verify = False
+        s = get_session()
         try:
-            if not s.post(f"{url}/login", data={"username": server['user'], "password": server['password']}, proxies=proxies, timeout=10).json().get('success'): return []
+            res_login = s.post(f"{url}/login", data={"username": server['user'], "password": server['password']}, proxies=proxies, timeout=10)
+            try:
+                is_logged = res_login.json().get('success')
+            except:
+                is_logged = res_login.status_code == 200
+                
+            if not is_logged: return []
+            
             res = s.get(f"{url}/panel/api/inbounds/list", proxies=proxies, timeout=10).json()
             clients_info = []
             for ib in res.get("obj", []):
@@ -399,7 +411,7 @@ def perform_action(server_id, uuid_str, action, **kwargs):
 
     with XrayTunnel(srv['xray_config']) as pxy:
         proxies = {"http": pxy, "https": pxy} if pxy else None
-        s = requests.Session(); s.verify = False
+        s = get_session()
         try:
             s.post(f"{url}/login", data={"username": srv['user'], "password": srv['password']}, proxies=proxies, timeout=10)
             inbounds = s.get(f"{url}/panel/api/inbounds/list", proxies=proxies, timeout=10).json().get("obj", [])
@@ -420,8 +432,10 @@ def perform_action(server_id, uuid_str, action, **kwargs):
                 target_client['enable'] = not target_client['enable']
                 payload = {"id": target_inb, "settings": json.dumps({"clients": [target_client]})}
                 res = s.post(f"{url}/panel/api/inbounds/updateClient/{uuid_str}", json=payload, proxies=proxies, timeout=10)
+                try: is_ok = res.json().get('success', False)
+                except: is_ok = res.status_code == 200
                 state_msg = "فعال ✅" if target_client['enable'] else "غیرفعال ⏸"
-                return res.json().get('success', False), f"وضعیت اکانت با موفقیت تغییر کرد و اکنون **{state_msg}** است."
+                return is_ok, f"وضعیت اکانت با موفقیت تغییر کرد و اکنون **{state_msg}** است."
             elif action == "extend":
                 days, gb = kwargs['days'], kwargs['gb']
                 target_client['enable'] = True
@@ -429,13 +443,16 @@ def perform_action(server_id, uuid_str, action, **kwargs):
                 target_client['totalGB'] = gb * (1024 ** 3)
                 payload = {"id": target_inb, "settings": json.dumps({"clients": [target_client]})}
                 res = s.post(f"{url}/panel/api/inbounds/updateClient/{uuid_str}", json=payload, proxies=proxies, timeout=10)
-                if res.json().get('success'):
+                try: is_ok = res.json().get('success')
+                except: is_ok = res.status_code == 200
+                
+                if is_ok:
                     s.post(f"{url}/panel/api/inbounds/{target_inb}/resetClientTraffic/{target_client['email']}", proxies=proxies, timeout=10)
                     return True, "✅ **اکانت با موفقیت تمدید و حجم آن ریست شد.**"
                 return False, "❌ خطا در برقراری ارتباط برای تمدید."
         except Exception as e: return False, f"خطا: {str(e)}"
 
-def create_config(server_id, inb_id, username, days, gb):
+def create_config(server_id, inb_ids_list, username, days, gb):
     conn = get_db(); c = conn.cursor()
     c.execute("SELECT * FROM servers WHERE id=?", (server_id,))
     srv = c.fetchone(); conn.close()
@@ -446,7 +463,7 @@ def create_config(server_id, inb_id, username, days, gb):
 
     with XrayTunnel(srv['xray_config']) as pxy:
         proxies = {"http": pxy, "https": pxy} if pxy else None
-        s = requests.Session(); s.verify = False
+        s = get_session()
         try:
             s.post(f"{url}/login", data={"username": srv['user'], "password": srv['password']}, proxies=proxies, timeout=10)
             uid = str(uuid.uuid4())
@@ -459,10 +476,16 @@ def create_config(server_id, inb_id, username, days, gb):
                 "limitIp": 1, "flow": "", "tgId": "", "subId": subid, "reset": 0
             }
             
-            payload = {"id": inb_id, "settings": json.dumps({"clients": [client_dict]})}
-            res = s.post(f"{url}/panel/api/inbounds/addClient", json=payload, proxies=proxies, timeout=10)
+            created_count = 0
+            for inb_id in inb_ids_list:
+                payload = {"id": inb_id, "settings": json.dumps({"clients": [client_dict]})}
+                res = s.post(f"{url}/panel/api/inbounds/addClient", json=payload, proxies=proxies, timeout=10)
+                try:
+                    if res.json().get('success'): created_count += 1
+                except:
+                    if res.status_code == 200: created_count += 1
             
-            if res.json().get('success'):
+            if created_count > 0:
                 settings_res = s.get(f"{url}/panel/setting/all", proxies=proxies, timeout=10).json()
                 sub_domain = settings_res.get('obj', {}).get('subDomain', '')
                 if not sub_domain: sub_domain = urllib.parse.urlparse(url).hostname
@@ -474,9 +497,9 @@ def create_config(server_id, inb_id, username, days, gb):
                 if not sub_path.endswith('/'): sub_path = sub_path + '/'
                 sub_url = f"http://{sub_domain}{port_str}{sub_path}{subid}"
                 
-                msg = f"✅ **اکانت با موفقیت ساخته شد!**\n\n👤 نام: `{username}`\n📦 حجم: {gb} GB\n⏳ اعتبار: {days} روز\n\n🔗 **لینک سابسکریپشن اختصاصی کاربر:**\n`{sub_url}`"
+                msg = f"✅ **اکانت با موفقیت ساخته شد!**\n\n👤 نام: `{username}`\n📦 حجم: {gb} GB\n⏳ اعتبار: {days} روز\n🔗 پورت‌های متصل: {created_count} عدد\n\n🌐 **لینک سابسکریپشن:**\n`{sub_url}`\n\n*(نکته: در صورت عدم کارکرد ساب‌لینک در پنل‌های قدیمی، از UUID زیر به عنوان ساب استفاده کنید:)*\n`{uid}`"
                 return True, msg, uid
-            return False, "خطا در API ساخت اکانت پنل", None
+            return False, "خطا در API ساخت اکانت پنل (هیچ پورتی متصل نشد)", None
         except Exception as e: return False, f"خطای ارتباط: {str(e)}", None
 
 def get_main_reply_keyboard():
@@ -500,6 +523,21 @@ def start(m):
     active_targets.pop(m.chat.id, None)
     text = "به دستیار هوشمند CRM خوش آمدید! 🤖\n\nبرای جستجو و مدیریت، یکی از موارد زیر را بفرستید:\n🔸 **نام کاربری (Email)**\n🔸 **UUID کلاینت**\n🔸 **متن کانفیگ Vless**\n\nیا از منوی پایین برای ساخت اکانت استفاده کنید 👇"
     bot.send_message(m.chat.id, text, parse_mode="Markdown", reply_markup=get_main_reply_keyboard())
+
+def get_inb_keyboard(chat_id):
+    st = create_states.get(chat_id)
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    if not st: return markup
+    for ib in st.get('inbounds', []):
+        mark = "✅ " if ib['id'] in st['selected'] else "▫️ "
+        markup.add(types.InlineKeyboardButton(f"{mark}پورت: {ib['port']} | {ib.get('remark','-')}", callback_data=f"cr_inb_{ib['id']}"))
+    
+    row = []
+    row.append(types.InlineKeyboardButton("☑️ انتخاب همه", callback_data="cr_all"))
+    row.append(types.InlineKeyboardButton("📥 تایید و ادامه", callback_data="cr_done"))
+    markup.add(*row)
+    markup.add(types.InlineKeyboardButton("❌ انصراف", callback_data="cr_cancel"))
+    return markup
 
 @bot.message_handler(func=lambda m: True)
 def handle_messages(m):
@@ -586,41 +624,69 @@ def show_client_info_and_keyboard(chat_id, cl):
 def handle_create_srv(call):
     bot.delete_message(call.message.chat.id, call.message.message_id)
     sid = int(call.data.split('_')[2])
-    create_states[call.message.chat.id] = {'sid': sid}
+    create_states[call.message.chat.id] = {'sid': sid, 'selected': []}
     wait = bot.send_message(call.message.chat.id, "⏳ در حال دریافت پورت‌های سرور...")
     
     conn = get_db(); c = conn.cursor(); c.execute("SELECT * FROM servers WHERE id=?", (sid,))
     srv = c.fetchone(); conn.close()
-    
     url = srv['host'].rstrip('/')
     if not url.startswith("http"): url = "https://" + url
     
     inbounds = []
     with XrayTunnel(srv['xray_config']) as pxy:
         proxies = {"http": pxy, "https": pxy} if pxy else None
-        s = requests.Session(); s.verify = False
+        s = get_session()
         try:
-            if s.post(f"{url}/login", data={"username": srv['user'], "password": srv['password']}, proxies=proxies, timeout=10).json().get('success'):
-                inbounds = s.get(f"{url}/panel/api/inbounds/list", proxies=proxies, timeout=10).json().get("obj", [])
+            res_login = s.post(f"{url}/login", data={"username": srv['user'], "password": srv['password']}, proxies=proxies, timeout=10)
+            try: is_logged = res_login.json().get('success')
+            except: is_logged = res_login.status_code == 200
+            
+            if is_logged:
+                inb_res = s.get(f"{url}/panel/api/inbounds/list", proxies=proxies, timeout=10)
+                try: inbounds = inb_res.json().get("obj", [])
+                except: pass
         except: pass
     
     bot.delete_message(call.message.chat.id, wait.message_id)
     if not inbounds:
-        bot.send_message(call.message.chat.id, "❌ خطا در دریافت پورت‌ها!")
+        bot.send_message(call.message.chat.id, "❌ خطا در دریافت پورت‌ها! (ممکن است اطلاعات سرور اشتباه باشد)", reply_markup=get_main_reply_keyboard())
         return
         
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    for ib in inbounds:
-        markup.add(types.InlineKeyboardButton(f"پورت: {ib['port']} | {ib['remark']}", callback_data=f"cr_inb_{ib['id']}"))
-    bot.send_message(call.message.chat.id, "لطفاً پورت (Inbound) مورد نظر را انتخاب کنید:", reply_markup=markup)
+    create_states[call.message.chat.id]['inbounds'] = inbounds
+    bot.send_message(call.message.chat.id, "🔘 **لطفاً پورت(های) مورد نظر را انتخاب کنید:**", reply_markup=get_inb_keyboard(call.message.chat.id), parse_mode="Markdown")
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith('cr_inb_'))
-def handle_create_inb(call):
-    bot.delete_message(call.message.chat.id, call.message.message_id)
-    inb_id = int(call.data.split('_')[2])
-    create_states[call.message.chat.id]['inb'] = inb_id
-    msg = bot.send_message(call.message.chat.id, "📝 **نام کاربری (Email) را به انگلیسی وارد کنید:**\n(لغو)", reply_markup=types.ReplyKeyboardRemove(), parse_mode="Markdown")
-    bot.register_next_step_handler(msg, cr_step_name)
+@bot.callback_query_handler(func=lambda c: c.data.startswith('cr_'))
+def handle_create_actions(call):
+    action = call.data
+    cid = call.message.chat.id
+    st = create_states.get(cid)
+    if not st: return
+    
+    if action == "cr_cancel":
+        bot.delete_message(cid, call.message.message_id)
+        create_states.pop(cid, None)
+        bot.send_message(cid, "عملیات لغو شد.", reply_markup=get_main_reply_keyboard())
+        return
+        
+    elif action == "cr_all":
+        all_ids = [ib['id'] for ib in st.get('inbounds', [])]
+        if set(st['selected']) == set(all_ids): st['selected'] = []
+        else: st['selected'] = all_ids
+        bot.edit_message_reply_markup(cid, call.message.message_id, reply_markup=get_inb_keyboard(cid))
+        
+    elif action == "cr_done":
+        if not st['selected']:
+            bot.answer_callback_query(call.id, "حداقل یک پورت را انتخاب کنید!", show_alert=True)
+            return
+        bot.delete_message(cid, call.message.message_id)
+        msg = bot.send_message(cid, "📝 **نام کاربری (Email) را به انگلیسی وارد کنید:**\n(لغو)", reply_markup=types.ReplyKeyboardRemove(), parse_mode="Markdown")
+        bot.register_next_step_handler(msg, cr_step_name)
+        
+    elif action.startswith('cr_inb_'):
+        inb_id = int(action.split('_')[2])
+        if inb_id in st['selected']: st['selected'].remove(inb_id)
+        else: st['selected'].append(inb_id)
+        bot.edit_message_reply_markup(cid, call.message.message_id, reply_markup=get_inb_keyboard(cid))
 
 def cr_step_name(m):
     txt = m.text.strip()
@@ -643,12 +709,11 @@ def cr_step_gb(m):
     if txt == "لغو": return handle_messages(m)
     if not txt.isdigit():
         msg = bot.reply_to(m, "❌ فقط عدد! حجم (GB):"); bot.register_next_step_handler(msg, cr_step_gb); return
-    
     st = create_states.get(m.chat.id)
     if not st: return
     
     wait = bot.send_message(m.chat.id, "⏳ در حال ساخت کانفیگ در سرور...")
-    ok, msg_resp, uid = create_config(st['sid'], st['inb'], st['name'], st['days'], int(txt))
+    ok, msg_resp, uid = create_config(st['sid'], st['selected'], st['name'], st['days'], int(txt))
     bot.delete_message(m.chat.id, wait.message_id)
     bot.send_message(m.chat.id, msg_resp, parse_mode="Markdown", reply_markup=get_main_reply_keyboard())
     create_states.pop(m.chat.id, None)
