@@ -154,7 +154,14 @@ cat << 'EOF' > panel.html
                     </div>
                 </div>
                 <div>
-                    <label class="text-sm font-bold text-gray-400 ml-2">مسیر امن Vless (جهت دور زدن فیلترینگ)</label>
+                    <label class="text-sm font-bold text-gray-400 ml-2">نوع پنل (نسخه)</label>
+                    <select id="srv-type" class="!mt-2">
+                        <option value="new">پنل جدید (3x-ui / سنایی جدید)</option>
+                        <option value="old">پنل قدیمی (x-ui کلاسیک / سنایی قدیم)</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="text-sm font-bold text-gray-400 ml-2">مسیر امن Vless (جهت دور زدن فیلترینگ - اختیاری)</label>
                     <textarea id="srv-xray" rows="2" placeholder="vless://..." dir="ltr" class="text-sm font-mono !mt-2"></textarea>
                 </div>
                 <label class="checkbox-container text-gray-300 font-bold text-sm">
@@ -213,7 +220,7 @@ cat << 'EOF' > panel.html
                                 ${s.name || 'بدون نام'}
                                 ${s.allow_sell ? '<i class="fas fa-cart-plus text-green-400 text-xs" title="فروش فعال"></i>' : ''}
                             </div>
-                            <div class="text-xs text-gray-400 font-mono mt-1 break-all" dir="ltr">${s.host}</div>
+                            <div class="text-xs text-gray-400 mt-1" dir="ltr">${s.host} <span class="text-[#c084fc] ml-2">(${s.panel_type === 'old' ? 'قدیمی' : 'جدید'})</span></div>
                         </div>
                     </div>
                     <div class="flex flex-wrap items-center gap-4 w-full md:w-auto justify-between md:justify-end mt-2 md:mt-0">
@@ -250,6 +257,7 @@ cat << 'EOF' > panel.html
                 document.getElementById('srv-user').value = s.user;
                 document.getElementById('srv-pass').value = s.password;
                 document.getElementById('srv-xray').value = s.xray_config;
+                document.getElementById('srv-type').value = s.panel_type || 'new';
                 document.getElementById('srv-allow-sell').checked = s.allow_sell ? true : false;
                 title.innerHTML = '<i class="fas fa-pen ml-3"></i> ویرایش سرور';
             } else {
@@ -259,6 +267,7 @@ cat << 'EOF' > panel.html
                 document.getElementById('srv-user').value = '';
                 document.getElementById('srv-pass').value = '';
                 document.getElementById('srv-xray').value = '';
+                document.getElementById('srv-type').value = 'new';
                 document.getElementById('srv-allow-sell').checked = true;
                 title.innerHTML = '<i class="fas fa-server ml-3"></i> افزودن سرور جدید';
             }
@@ -272,7 +281,8 @@ cat << 'EOF' > panel.html
             const data = {
                 name: document.getElementById('srv-name').value, host: document.getElementById('srv-host').value,
                 user: document.getElementById('srv-user').value, password: document.getElementById('srv-pass').value,
-                xray_config: document.getElementById('srv-xray').value, allow_sell: document.getElementById('srv-allow-sell').checked
+                xray_config: document.getElementById('srv-xray').value, allow_sell: document.getElementById('srv-allow-sell').checked,
+                panel_type: document.getElementById('srv-type').value
             };
             if(!data.host || !data.user || !data.password) return showToast("فیلدهای ضروری را پر کنید!");
             
@@ -304,7 +314,6 @@ BOT_TOKEN = "BOT_TOKEN_PLACEHOLDER"
 DB_PATH = "users.db"
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# User-Agent for bypassing CF / 403 Forbidden
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
 
 active_targets = {}
@@ -314,7 +323,11 @@ create_states = {}
 def get_session():
     s = requests.Session()
     s.verify = False
-    s.headers.update({"User-Agent": USER_AGENT})
+    s.headers.update({
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json, text/plain, */*",
+        "X-Requested-With": "XMLHttpRequest"
+    })
     return s
 
 def get_db():
@@ -371,16 +384,14 @@ class XrayTunnel:
 def fetch_clients(server):
     url = server['host'].rstrip('/')
     if not url.startswith("http"): url = "https://" + url
-    with XrayTunnel(server['xray_config']) as pxy:
+    with XrayTunnel(server.get('xray_config', '')) as pxy:
         proxies = {"http": pxy, "https": pxy} if pxy else None
         s = get_session()
         try:
             res_login = s.post(f"{url}/login", data={"username": server['user'], "password": server['password']}, proxies=proxies, timeout=10)
-            try:
-                is_logged = res_login.json().get('success')
-            except:
-                is_logged = res_login.status_code == 200
-                
+            try: is_logged = res_login.json().get('success')
+            except: is_logged = res_login.status_code == 200
+            
             if not is_logged: return []
             
             res = s.get(f"{url}/panel/api/inbounds/list", proxies=proxies, timeout=10).json()
@@ -391,10 +402,11 @@ def fetch_clients(server):
                 stats = {st['email']: st for st in ib.get('clientStats', [])}
                 for c in settings.get('clients', []):
                     em = c.get('email', '')
+                    uid_str = c.get('id') or c.get('password') or ''
                     st = stats.get(em, {})
                     clients_info.append({
                         "server_id": server['id'], "server_name": server['name'] or url,
-                        "inbound_id": inbound_id, "uuid": c.get('id'), "email": em, "enable": c.get('enable', True),
+                        "inbound_id": inbound_id, "uuid": uid_str, "email": em, "enable": c.get('enable', True),
                         "total": st.get('total', 0), "up": st.get('up', 0), "down": st.get('down', 0), "expiry": st.get('expiryTime', 0)
                     })
             return clients_info
@@ -409,7 +421,7 @@ def perform_action(server_id, uuid_str, action, **kwargs):
     url = srv['host'].rstrip('/')
     if not url.startswith("http"): url = "https://" + url
 
-    with XrayTunnel(srv['xray_config']) as pxy:
+    with XrayTunnel(srv.get('xray_config', '')) as pxy:
         proxies = {"http": pxy, "https": pxy} if pxy else None
         s = get_session()
         try:
@@ -419,7 +431,8 @@ def perform_action(server_id, uuid_str, action, **kwargs):
             for ib in inbounds:
                 settings = json.loads(ib.get('settings', '{}'))
                 for cl in settings.get('clients', []):
-                    if cl.get('id') == uuid_str:
+                    client_id = cl.get('id') or cl.get('password') or ''
+                    if client_id == uuid_str:
                         target_inb = ib['id']; target_client = cl; break
                 if target_inb: break
             
@@ -439,8 +452,8 @@ def perform_action(server_id, uuid_str, action, **kwargs):
             elif action == "extend":
                 days, gb = kwargs['days'], kwargs['gb']
                 target_client['enable'] = True
-                target_client['expiryTime'] = int(time.time() * 1000) + (days * 24 * 3600 * 1000)
-                target_client['totalGB'] = gb * (1024 ** 3)
+                target_client['expiryTime'] = int(time.time() * 1000) + (days * 24 * 3600 * 1000) if days > 0 else 0
+                target_client['totalGB'] = gb * (1024 ** 3) if gb > 0 else 0
                 payload = {"id": target_inb, "settings": json.dumps({"clients": [target_client]})}
                 res = s.post(f"{url}/panel/api/inbounds/updateClient/{uuid_str}", json=payload, proxies=proxies, timeout=10)
                 try: is_ok = res.json().get('success')
@@ -452,7 +465,7 @@ def perform_action(server_id, uuid_str, action, **kwargs):
                 return False, "❌ خطا در برقراری ارتباط برای تمدید."
         except Exception as e: return False, f"خطا: {str(e)}"
 
-def create_config(server_id, inb_ids_list, username, days, gb):
+def create_config(server_id, inb_ids_list, username, days, gb, inbounds_data):
     conn = get_db(); c = conn.cursor()
     c.execute("SELECT * FROM servers WHERE id=?", (server_id,))
     srv = c.fetchone(); conn.close()
@@ -460,24 +473,42 @@ def create_config(server_id, inb_ids_list, username, days, gb):
 
     url = srv['host'].rstrip('/')
     if not url.startswith("http"): url = "https://" + url
+    panel_type = srv.get('panel_type', 'new')
 
-    with XrayTunnel(srv['xray_config']) as pxy:
+    with XrayTunnel(srv.get('xray_config', '')) as pxy:
         proxies = {"http": pxy, "https": pxy} if pxy else None
         s = get_session()
         try:
             s.post(f"{url}/login", data={"username": srv['user'], "password": srv['password']}, proxies=proxies, timeout=10)
+            
             uid = str(uuid.uuid4())
             subid = ''.join(random.choices(string.ascii_lowercase + string.digits, k=16))
             
-            client_dict = {
-                "id": uid, "email": username, "enable": True,
-                "expiryTime": int(time.time() * 1000) + (days * 86400000) if days > 0 else 0,
-                "totalGB": gb * 1073741824 if gb > 0 else 0,
-                "limitIp": 1, "flow": "", "tgId": "", "subId": subid, "reset": 0
-            }
-            
             created_count = 0
             for inb_id in inb_ids_list:
+                target_ib = next((x for x in inbounds_data if x['id'] == inb_id), None)
+                protocol = target_ib['protocol'] if target_ib else 'vless'
+                
+                client_dict = {
+                    "email": username, 
+                    "enable": True,
+                    "expiryTime": int(time.time() * 1000) + (days * 86400000) if days > 0 else 0,
+                    "totalGB": gb * 1073741824 if gb > 0 else 0
+                }
+                
+                if protocol in ["vless", "vmess"]:
+                    client_dict["id"] = uid
+                    if protocol == "vless" and panel_type != 'old':
+                        client_dict["flow"] = ""
+                elif protocol in ["trojan", "shadowsocks"]:
+                    client_dict["password"] = uid.replace("-", "")[:16]
+                    
+                if panel_type != 'old':
+                    client_dict["subId"] = subid
+                    client_dict["tgId"] = ""
+                    client_dict["limitIp"] = 1
+                    client_dict["reset"] = 0
+                
                 payload = {"id": inb_id, "settings": json.dumps({"clients": [client_dict]})}
                 res = s.post(f"{url}/panel/api/inbounds/addClient", json=payload, proxies=proxies, timeout=10)
                 try:
@@ -486,18 +517,25 @@ def create_config(server_id, inb_ids_list, username, days, gb):
                     if res.status_code == 200: created_count += 1
             
             if created_count > 0:
-                settings_res = s.get(f"{url}/panel/setting/all", proxies=proxies, timeout=10).json()
-                sub_domain = settings_res.get('obj', {}).get('subDomain', '')
-                if not sub_domain: sub_domain = urllib.parse.urlparse(url).hostname
-                sub_port = settings_res.get('obj', {}).get('subPort', '')
-                sub_path = settings_res.get('obj', {}).get('subPath', '/sub/')
+                sub_url = ""
+                if panel_type != 'old':
+                    try:
+                        settings_res = s.get(f"{url}/panel/setting/all", proxies=proxies, timeout=10).json()
+                        sub_domain = settings_res.get('obj', {}).get('subDomain', '')
+                        if not sub_domain: sub_domain = urllib.parse.urlparse(url).hostname
+                        sub_port = settings_res.get('obj', {}).get('subPort', '')
+                        sub_path = settings_res.get('obj', {}).get('subPath', '/sub/')
+                        
+                        port_str = f":{sub_port}" if sub_port and str(sub_port) not in ["80", "443"] else ""
+                        if not sub_path.startswith('/'): sub_path = '/' + sub_path
+                        if not sub_path.endswith('/'): sub_path = sub_path + '/'
+                        sub_url = f"http://{sub_domain}{port_str}{sub_path}{subid}"
+                    except: pass
                 
-                port_str = f":{sub_port}" if sub_port and str(sub_port) not in ["80", "443"] else ""
-                if not sub_path.startswith('/'): sub_path = '/' + sub_path
-                if not sub_path.endswith('/'): sub_path = sub_path + '/'
-                sub_url = f"http://{sub_domain}{port_str}{sub_path}{subid}"
-                
-                msg = f"✅ **اکانت با موفقیت ساخته شد!**\n\n👤 نام: `{username}`\n📦 حجم: {gb} GB\n⏳ اعتبار: {days} روز\n🔗 پورت‌های متصل: {created_count} عدد\n\n🌐 **لینک سابسکریپشن:**\n`{sub_url}`\n\n*(نکته: در صورت عدم کارکرد ساب‌لینک در پنل‌های قدیمی، از UUID زیر به عنوان ساب استفاده کنید:)*\n`{uid}`"
+                msg = f"✅ **اکانت با موفقیت ساخته شد!**\n\n👤 نام: `{username}`\n📦 حجم: {'نامحدود' if gb==0 else str(gb)+' GB'}\n⏳ اعتبار: {'نامحدود' if days==0 else str(days)+' روز'}\n🔗 پورت‌های متصل: {created_count} عدد"
+                if sub_url:
+                    msg += f"\n\n🌐 **لینک سابسکریپشن:**\n`{sub_url}`"
+                msg += f"\n\n🔑 **شناسه (UUID/Password):**\n`{uid}`"
                 return True, msg, uid
             return False, "خطا در API ساخت اکانت پنل (هیچ پورتی متصل نشد)", None
         except Exception as e: return False, f"خطای ارتباط: {str(e)}", None
@@ -521,7 +559,7 @@ def check_admin(m):
 def start(m):
     if not check_admin(m): return
     active_targets.pop(m.chat.id, None)
-    text = "به دستیار هوشمند CRM خوش آمدید! 🤖\n\nبرای جستجو و مدیریت، یکی از موارد زیر را بفرستید:\n🔸 **نام کاربری (Email)**\n🔸 **UUID کلاینت**\n🔸 **متن کانفیگ Vless**\n\nیا از منوی پایین برای ساخت اکانت استفاده کنید 👇"
+    text = "به دستیار هوشمند CRM خوش آمدید! 🤖\n\nبرای جستجو و مدیریت، یکی از موارد زیر را بفرستید:\n🔸 **نام کاربری (Email)**\n🔸 **UUID یا Password کلاینت**\n🔸 **متن کانفیگ Vless/Trojan**\n\nیا از منوی پایین برای ساخت اکانت استفاده کنید 👇"
     bot.send_message(m.chat.id, text, parse_mode="Markdown", reply_markup=get_main_reply_keyboard())
 
 def get_inb_keyboard(chat_id):
@@ -530,7 +568,7 @@ def get_inb_keyboard(chat_id):
     if not st: return markup
     for ib in st.get('inbounds', []):
         mark = "✅ " if ib['id'] in st['selected'] else "▫️ "
-        markup.add(types.InlineKeyboardButton(f"{mark}پورت: {ib['port']} | {ib.get('remark','-')}", callback_data=f"cr_inb_{ib['id']}"))
+        markup.add(types.InlineKeyboardButton(f"{mark}پورت: {ib['port']} ({ib.get('protocol','-')}) | {ib.get('remark','-')}", callback_data=f"cr_inb_{ib['id']}"))
     
     row = []
     row.append(types.InlineKeyboardButton("☑️ انتخاب همه", callback_data="cr_all"))
@@ -582,12 +620,13 @@ def handle_messages(m):
             bot.send_message(m.chat.id, msg, parse_mode="Markdown")
         elif txt == "🔄 تمدید اکانت":
             step_states[m.chat.id] = {'sid': target['sid'], 'uuid': target['uuid']}
-            msg = bot.send_message(m.chat.id, "🔄 **تمدید:**\nتعداد روز را بصورت عدد وارد کنید:\n(لغو)", parse_mode="Markdown", reply_markup=types.ReplyKeyboardRemove())
+            msg = bot.send_message(m.chat.id, "🔄 **تمدید:**\nتعداد روز را بصورت عدد وارد کنید:\n(0 = نامحدود | لغو)", parse_mode="Markdown", reply_markup=types.ReplyKeyboardRemove())
             bot.register_next_step_handler(msg, step_days)
         return
 
     bot.clear_step_handler_by_chat_id(m.chat.id)
     query = urllib.parse.urlparse("vless://" + txt.split("://")[-1]).username if "vless://" in txt.lower() else txt
+    query = urllib.parse.urlparse("trojan://" + query.split("://")[-1]).username if "trojan://" in query.lower() else query
     msg_wait = bot.reply_to(m, "⏳ در حال جستجو...", reply_markup=get_main_reply_keyboard())
     conn = get_db(); c = conn.cursor(); c.execute("SELECT * FROM servers")
     servers = c.fetchall(); conn.close()
@@ -633,7 +672,7 @@ def handle_create_srv(call):
     if not url.startswith("http"): url = "https://" + url
     
     inbounds = []
-    with XrayTunnel(srv['xray_config']) as pxy:
+    with XrayTunnel(srv.get('xray_config', '')) as pxy:
         proxies = {"http": pxy, "https": pxy} if pxy else None
         s = get_session()
         try:
@@ -692,7 +731,7 @@ def cr_step_name(m):
     txt = m.text.strip()
     if txt == "لغو": return handle_messages(m)
     create_states[m.chat.id]['name'] = txt
-    msg = bot.send_message(m.chat.id, "📅 **تعداد روز اعتبار را وارد کنید (0 = نامحدود):**", parse_mode="Markdown")
+    msg = bot.send_message(m.chat.id, "📅 **تعداد روز اعتبار را وارد کنید:**\n(0 = نامحدود)", parse_mode="Markdown")
     bot.register_next_step_handler(msg, cr_step_days)
 
 def cr_step_days(m):
@@ -701,7 +740,7 @@ def cr_step_days(m):
     if not txt.isdigit():
         msg = bot.reply_to(m, "❌ فقط عدد! تعداد روز:"); bot.register_next_step_handler(msg, cr_step_days); return
     create_states[m.chat.id]['days'] = int(txt)
-    msg = bot.send_message(m.chat.id, "📦 **حجم به گیگابایت را وارد کنید (0 = نامحدود):**", parse_mode="Markdown")
+    msg = bot.send_message(m.chat.id, "📦 **حجم به گیگابایت را وارد کنید:**\n(0 = نامحدود)", parse_mode="Markdown")
     bot.register_next_step_handler(msg, cr_step_gb)
 
 def cr_step_gb(m):
@@ -713,7 +752,7 @@ def cr_step_gb(m):
     if not st: return
     
     wait = bot.send_message(m.chat.id, "⏳ در حال ساخت کانفیگ در سرور...")
-    ok, msg_resp, uid = create_config(st['sid'], st['selected'], st['name'], st['days'], int(txt))
+    ok, msg_resp, uid = create_config(st['sid'], st['selected'], st['name'], st['days'], int(txt), st['inbounds'])
     bot.delete_message(m.chat.id, wait.message_id)
     bot.send_message(m.chat.id, msg_resp, parse_mode="Markdown", reply_markup=get_main_reply_keyboard())
     create_states.pop(m.chat.id, None)
@@ -778,6 +817,8 @@ def init_db():
     c.execute('CREATE TABLE IF NOT EXISTS servers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, host TEXT, user TEXT, password TEXT, xray_config TEXT, allow_sell INTEGER DEFAULT 1)')
     try: c.execute("ALTER TABLE servers ADD COLUMN allow_sell INTEGER DEFAULT 1")
     except: pass
+    try: c.execute("ALTER TABLE servers ADD COLUMN panel_type TEXT DEFAULT 'new'")
+    except: pass
     c.execute('CREATE TABLE IF NOT EXISTS admin (username TEXT, password TEXT)')
     c.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
     if c.execute('SELECT count(*) FROM admin').fetchone()[0] == 0:
@@ -786,7 +827,7 @@ def init_db():
 init_db()
 
 class LoginModel(BaseModel): username: str; password: str
-class ServerModel(BaseModel): name: str; host: str; user: str; password: str; xray_config: str; allow_sell: bool
+class ServerModel(BaseModel): name: str; host: str; user: str; password: str; xray_config: str; allow_sell: bool; panel_type: str = 'new'
 class SettingsModel(BaseModel): admin_ids: str
 
 @app.post("/api/login")
@@ -818,13 +859,13 @@ def get_servers():
 @app.post("/api/servers")
 def add_server(s: ServerModel):
     conn = sqlite3.connect(DB_PATH); c = conn.cursor()
-    c.execute("INSERT INTO servers (name, host, user, password, xray_config, allow_sell) VALUES (?, ?, ?, ?, ?, ?)", (s.name, s.host, s.user, s.password, s.xray_config, 1 if s.allow_sell else 0))
+    c.execute("INSERT INTO servers (name, host, user, password, xray_config, allow_sell, panel_type) VALUES (?, ?, ?, ?, ?, ?, ?)", (s.name, s.host, s.user, s.password, s.xray_config, 1 if s.allow_sell else 0, s.panel_type))
     conn.commit(); conn.close(); return {"success": True}
 
 @app.put("/api/servers/{server_id}")
 def edit_server(server_id: int, s: ServerModel):
     conn = sqlite3.connect(DB_PATH); c = conn.cursor()
-    c.execute("UPDATE servers SET name=?, host=?, user=?, password=?, xray_config=?, allow_sell=? WHERE id=?", (s.name, s.host, s.user, s.password, s.xray_config, 1 if s.allow_sell else 0, server_id))
+    c.execute("UPDATE servers SET name=?, host=?, user=?, password=?, xray_config=?, allow_sell=?, panel_type=? WHERE id=?", (s.name, s.host, s.user, s.password, s.xray_config, 1 if s.allow_sell else 0, s.panel_type, server_id))
     conn.commit(); conn.close(); return {"success": True}
 
 @app.delete("/api/servers/{server_id}")
