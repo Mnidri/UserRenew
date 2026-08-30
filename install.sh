@@ -307,11 +307,18 @@ EOF
 cat << 'EOF' > xray_bot.py
 import telebot
 from telebot import types
-import sqlite3, os, requests, json, urllib3, socket, subprocess, time, urllib.parse, uuid, random, string
+import sqlite3, os, requests, json, urllib3, socket, subprocess, time, urllib.parse, uuid, random, string, re, base64
 urllib3.disable_warnings()
 
+try:
+    conn = sqlite3.connect("/root/UserRenew/users.db")
+    conn.execute("ALTER TABLE servers ADD COLUMN sub_url TEXT")
+    conn.commit()
+    conn.close()
+except: pass
+
 BOT_TOKEN = "BOT_TOKEN_PLACEHOLDER"
-DB_PATH = "users.db"
+DB_PATH = "/root/UserRenew/users.db"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
@@ -320,15 +327,38 @@ active_targets = {}
 step_states = {}
 create_states = {}
 
-def get_session():
+def safe_loads(val):
+    if isinstance(val, (dict, list)): return val
+    try: return json.loads(val) if val else {}
+    except: return {}
+
+def get_session(base_url=None):
     s = requests.Session()
     s.verify = False
     s.headers.update({
         "User-Agent": USER_AGENT,
         "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json",
         "X-Requested-With": "XMLHttpRequest"
     })
+    if base_url:
+        parsed = urllib.parse.urlparse(base_url)
+        s.headers.update({
+            "Origin": f"{parsed.scheme}://{parsed.netloc}",
+            "Referer": f"{base_url}/"
+        })
     return s
+
+def panel_login(s, url, username, password, proxies=None):
+    try:
+        res_get = s.get(f"{url}/", proxies=proxies, timeout=10)
+        match = re.search(r'name="csrf-token"\s+content="([^"]+)"', res_get.text, re.IGNORECASE)
+        if match: s.headers.update({"X-CSRF-Token": match.group(1)})
+        s.headers.update({"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"})
+        res = s.post(f"{url}/login", data={"username": username, "password": password}, proxies=proxies, timeout=10)
+        s.headers.update({"Content-Type": "application/json"})
+        return res
+    except: return None
 
 def get_db():
     conn = sqlite3.connect(DB_PATH, timeout=20)
@@ -386,9 +416,10 @@ def fetch_clients(server):
     if not url.startswith("http"): url = "https://" + url
     with XrayTunnel(server.get('xray_config', '')) as pxy:
         proxies = {"http": pxy, "https": pxy} if pxy else None
-        s = get_session()
+        s = get_session(url)
         try:
-            res_login = s.post(f"{url}/login", data={"username": server['user'], "password": server['password']}, proxies=proxies, timeout=10)
+            res_login = panel_login(s, url, server['user'], server['password'], proxies)
+            if not res_login: return []
             try: is_logged = res_login.json().get('success')
             except: is_logged = res_login.status_code == 200
             
@@ -398,7 +429,7 @@ def fetch_clients(server):
             clients_info = []
             for ib in res.get("obj", []):
                 inbound_id = ib['id']
-                settings = json.loads(ib.get('settings', '{}'))
+                settings = safe_loads(ib.get('settings', '{}'))
                 stats = {st['email']: st for st in ib.get('clientStats', [])}
                 for c in settings.get('clients', []):
                     em = c.get('email', '')
@@ -423,121 +454,268 @@ def perform_action(server_id, uuid_str, action, **kwargs):
 
     with XrayTunnel(srv.get('xray_config', '')) as pxy:
         proxies = {"http": pxy, "https": pxy} if pxy else None
-        s = get_session()
+        s = get_session(url)
         try:
-            s.post(f"{url}/login", data={"username": srv['user'], "password": srv['password']}, proxies=proxies, timeout=10)
+            res_login = panel_login(s, url, srv['user'], srv['password'], proxies)
+            if not res_login or res_login.status_code != 200: return False, "خطا در ورود به پنل"
+            
             inbounds = s.get(f"{url}/panel/api/inbounds/list", proxies=proxies, timeout=10).json().get("obj", [])
-            target_inb, target_client = None, None
+            
+            targets = []
             for ib in inbounds:
-                settings = json.loads(ib.get('settings', '{}'))
+                settings = safe_loads(ib.get('settings', '{}'))
                 for cl in settings.get('clients', []):
                     client_id = cl.get('id') or cl.get('password') or ''
                     if client_id == uuid_str:
-                        target_inb = ib['id']; target_client = cl; break
-                if target_inb: break
+                        targets.append((ib, cl))
+                        break
             
-            if not target_inb: return False, "کلاینت در سرور یافت نشد"
-
-            if action == "delete":
-                s.post(f"{url}/panel/api/inbounds/{target_inb}/delClient/{uuid_str}", proxies=proxies, timeout=10)
-                return True, "کانفیگ با موفقیت حذف شد. 🗑"
-            elif action == "toggle":
-                target_client['enable'] = not target_client['enable']
-                payload = {"id": target_inb, "settings": json.dumps({"clients": [target_client]})}
-                res = s.post(f"{url}/panel/api/inbounds/updateClient/{uuid_str}", json=payload, proxies=proxies, timeout=10)
-                try: is_ok = res.json().get('success', False)
-                except: is_ok = res.status_code == 200
-                state_msg = "فعال ✅" if target_client['enable'] else "غیرفعال ⏸"
-                return is_ok, f"وضعیت اکانت با موفقیت تغییر کرد و اکنون **{state_msg}** است."
-            elif action == "extend":
-                days, gb = kwargs['days'], kwargs['gb']
-                target_client['enable'] = True
-                target_client['expiryTime'] = int(time.time() * 1000) + (days * 24 * 3600 * 1000) if days > 0 else 0
-                target_client['totalGB'] = gb * (1024 ** 3) if gb > 0 else 0
-                payload = {"id": target_inb, "settings": json.dumps({"clients": [target_client]})}
-                res = s.post(f"{url}/panel/api/inbounds/updateClient/{uuid_str}", json=payload, proxies=proxies, timeout=10)
-                try: is_ok = res.json().get('success')
-                except: is_ok = res.status_code == 200
-                
-                if is_ok:
-                    s.post(f"{url}/panel/api/inbounds/{target_inb}/resetClientTraffic/{target_client['email']}", proxies=proxies, timeout=10)
-                    return True, "✅ **اکانت با موفقیت تمدید و حجم آن ریست شد.**"
-                return False, "❌ خطا در برقراری ارتباط برای تمدید."
+            if not targets: return False, "کلاینت در سرور یافت نشد"
+            
+            msg_out = ""
+            new_enable_state = not targets[0][1]['enable']
+            
+            for ib, cl in targets:
+                target_inb = ib['id']
+                if action == "delete":
+                    res = s.post(f"{url}/panel/api/inbounds/{target_inb}/delClient/{uuid_str}", proxies=proxies, timeout=10)
+                    if res.status_code == 404: 
+                        settings = safe_loads(ib.get('settings', '{}'))
+                        settings['clients'] = [c for c in settings.get('clients', []) if c.get('id') != uuid_str and c.get('password') != uuid_str]
+                        p2 = ib.copy()
+                        p2['settings'] = json.dumps(settings)
+                        s.post(f"{url}/panel/api/inbounds/update/{target_inb}", json=p2, proxies=proxies, timeout=10)
+                    msg_out = "کانفیگ با موفقیت حذف شد. 🗑"
+                    
+                elif action == "toggle":
+                    cl['enable'] = new_enable_state
+                    payload = {"id": target_inb, "settings": json.dumps({"clients": [cl]})}
+                    res = s.post(f"{url}/panel/api/inbounds/updateClient/{uuid_str}", json=payload, proxies=proxies, timeout=10)
+                    if res.status_code == 404:
+                        settings = safe_loads(ib.get('settings', '{}'))
+                        for cx in settings.get('clients', []):
+                            if cx.get('id') == uuid_str or cx.get('password') == uuid_str: cx['enable'] = new_enable_state
+                        p2 = ib.copy()
+                        p2['settings'] = json.dumps(settings)
+                        res = s.post(f"{url}/panel/api/inbounds/update/{target_inb}", json=p2, proxies=proxies, timeout=10)
+                    state_msg = "فعال ✅" if new_enable_state else "غیرفعال ⏸"
+                    msg_out = f"وضعیت اکانت با موفقیت تغییر کرد و اکنون **{state_msg}** است."
+                    
+                elif action == "extend":
+                    days, gb = kwargs['days'], kwargs['gb']
+                    cl['enable'] = True
+                    cl['expiryTime'] = int(time.time() * 1000) + (days * 24 * 3600 * 1000) if days > 0 else 0
+                    cl['totalGB'] = gb * (1024 ** 3) if gb > 0 else 0
+                    payload = {"id": target_inb, "settings": json.dumps({"clients": [cl]})}
+                    res = s.post(f"{url}/panel/api/inbounds/updateClient/{uuid_str}", json=payload, proxies=proxies, timeout=10)
+                    if res.status_code == 404:
+                        settings = safe_loads(ib.get('settings', '{}'))
+                        for cx in settings.get('clients', []):
+                            if cx.get('id') == uuid_str or cx.get('password') == uuid_str:
+                                cx['enable'] = True; cx['expiryTime'] = cl['expiryTime']; cx['totalGB'] = cl['totalGB']
+                        p2 = ib.copy()
+                        p2['settings'] = json.dumps(settings)
+                        res = s.post(f"{url}/panel/api/inbounds/update/{target_inb}", json=p2, proxies=proxies, timeout=10)
+                    
+                    s.post(f"{url}/panel/api/inbounds/{target_inb}/resetClientTraffic/{cl['email']}", proxies=proxies, timeout=10)
+                    msg_out = "✅ **اکانت با موفقیت تمدید و حجم آن ریست شد.**"
+                    
+            return True, msg_out
         except Exception as e: return False, f"خطا: {str(e)}"
 
-def create_config(server_id, inb_ids_list, username, days, gb, inbounds_data):
+def generate_raw_config_exact(protocol, uid, address, port, stream_settings, remark):
+    net = stream_settings.get("network", "tcp")
+    sec = stream_settings.get("security", "none")
+    q = {"type": net}
+    if protocol == "vless": q["encryption"] = "none"
+    q["security"] = sec
+    
+    sni_val = ""
+    if sec == "tls": sni_val = stream_settings.get("tlsSettings", {}).get("serverName", "")
+    elif sec == "reality": sni_val = stream_settings.get("realitySettings", {}).get("serverName", "")
+        
+    if net == "ws":
+        ws = stream_settings.get("wsSettings", {})
+        if ws.get("path"): q["path"] = ws.get("path")
+        headers = ws.get("headers", {})
+        host_val = headers.get("Host") or headers.get("host")
+        if host_val: q["host"] = host_val
+        elif sni_val: q["host"] = sni_val
+    elif net == "grpc":
+        grpc = stream_settings.get("grpcSettings", {})
+        if grpc.get("serviceName"): q["serviceName"] = grpc.get("serviceName")
+        if grpc.get("multiMode"): q["mode"] = "multi"
+    elif net == "tcp":
+        tcp = stream_settings.get("tcpSettings", {})
+        if tcp.get("header", {}).get("type") == "http":
+            q["headerType"] = "http"
+            hosts = tcp.get("header", {}).get("request", {}).get("headers", {}).get("Host", [])
+            if hosts: q["host"] = hosts[0] if isinstance(hosts, list) else hosts
+
+    if sec == "tls":
+        tls = stream_settings.get("tlsSettings", {})
+        if tls.get("serverName"): q["sni"] = tls.get("serverName")
+        if tls.get("settings", {}).get("fingerprint"): q["fp"] = tls.get("settings", {}).get("fingerprint")
+        if tls.get("alpn"):
+            alpn = tls.get("alpn")
+            q["alpn"] = ",".join(alpn) if isinstance(alpn, list) else alpn
+    elif sec == "reality":
+        reality = stream_settings.get("realitySettings", {})
+        if reality.get("serverName"): q["sni"] = reality.get("serverName")
+        if reality.get("settings", {}).get("fingerprint"): q["fp"] = reality.get("settings", {}).get("fingerprint")
+        if reality.get("settings", {}).get("publicKey"): q["pbk"] = reality.get("settings", {}).get("publicKey")
+        shortIds = reality.get("settings", {}).get("shortIds", [])
+        if shortIds and len(shortIds) > 0: q["sid"] = shortIds[0]
+        if reality.get("alpn"):
+            alpn = reality.get("alpn")
+            q["alpn"] = ",".join(alpn) if isinstance(alpn, list) else alpn
+
+    order = ["encryption", "security", "type", "path", "host", "fp", "alpn", "sni", "pbk", "sid"]
+    ordered_q = {k: q[k] for k in order if k in q}
+    for k in q:
+        if k not in ordered_q: ordered_q[k] = q[k]
+
+    q_str = "&".join(f"{k}={urllib.parse.quote(str(v), safe='')}" for k, v in ordered_q.items() if v)
+    remark_encoded = urllib.parse.quote(remark, safe='')
+    
+    if protocol == "vless":
+        link = f"vless://{uid}@{address}:{port}?{q_str}#{remark_encoded}"
+    elif protocol == "trojan":
+        t_pass = uid.replace("-", "")[:16]
+        link = f"trojan://{t_pass}@{address}:{port}?{q_str}#{remark_encoded}"
+    else: return ""
+    return f"`{link}`"
+
+def create_config(server_id, inb_ids_list, username, days, gb):
     conn = get_db(); c = conn.cursor()
     c.execute("SELECT * FROM servers WHERE id=?", (server_id,))
     srv = c.fetchone(); conn.close()
     if not srv: return False, "سرور یافت نشد", None
+    srv = dict(srv)
 
     url = srv['host'].rstrip('/')
     if not url.startswith("http"): url = "https://" + url
     panel_type = srv.get('panel_type', 'new')
-
+    sub_base_url = srv.get('sub_url', '').strip() if srv.get('sub_url') else ''
+    parsed_url = urllib.parse.urlparse(url)
+    
     with XrayTunnel(srv.get('xray_config', '')) as pxy:
         proxies = {"http": pxy, "https": pxy} if pxy else None
-        s = get_session()
+        s = get_session(url)
         try:
-            s.post(f"{url}/login", data={"username": srv['user'], "password": srv['password']}, proxies=proxies, timeout=10)
+            res_login = panel_login(s, url, srv['user'], srv['password'], proxies)
+            if not res_login or res_login.status_code != 200: return False, "خطا در ورود به پنل", None
+            
+            inbounds_data = s.get(f"{url}/panel/api/inbounds/list", proxies=proxies, timeout=10).json().get("obj", [])
+            
+            # 🔒 Check Duplicate
+            for ib in inbounds_data:
+                settings = safe_loads(ib.get('settings', '{}'))
+                for cl in settings.get('clients', []):
+                    if cl.get('email', '').lower() == username.lower():
+                        return False, "⚠️ **خطا:** کاربری با این نام از قبل وجود دارد! لطفاً نام دیگری انتخاب کنید.", None
             
             uid = str(uuid.uuid4())
             subid = ''.join(random.choices(string.ascii_lowercase + string.digits, k=16))
-            
             created_count = 0
+            
             for inb_id in inb_ids_list:
                 target_ib = next((x for x in inbounds_data if x['id'] == inb_id), None)
                 protocol = target_ib['protocol'] if target_ib else 'vless'
-                
                 client_dict = {
-                    "email": username, 
-                    "enable": True,
+                    "email": username, "enable": True,
                     "expiryTime": int(time.time() * 1000) + (days * 86400000) if days > 0 else 0,
                     "totalGB": gb * 1073741824 if gb > 0 else 0
                 }
-                
                 if protocol in ["vless", "vmess"]:
                     client_dict["id"] = uid
-                    if protocol == "vless" and panel_type != 'old':
-                        client_dict["flow"] = ""
-                elif protocol in ["trojan", "shadowsocks"]:
-                    client_dict["password"] = uid.replace("-", "")[:16]
+                    if protocol == "vless" and panel_type != 'old': client_dict["flow"] = ""
+                elif protocol in ["trojan", "shadowsocks"]: client_dict["password"] = uid.replace("-", "")[:16]
                     
                 if panel_type != 'old':
-                    client_dict["subId"] = subid
-                    client_dict["tgId"] = ""
-                    client_dict["limitIp"] = 1
-                    client_dict["reset"] = 0
+                    client_dict["subId"] = subid; client_dict["tgId"] = 0; client_dict["limitIp"] = 1; client_dict["reset"] = 0
                 
                 payload = {"id": inb_id, "settings": json.dumps({"clients": [client_dict]})}
                 res = s.post(f"{url}/panel/api/inbounds/addClient", json=payload, proxies=proxies, timeout=10)
-                try:
+                if res.status_code == 404: 
+                    settings = safe_loads(target_ib.get('settings', '{}'))
+                    if 'clients' not in settings: settings['clients'] = []
+                    settings['clients'].append(client_dict)
+                    p2 = target_ib.copy()
+                    p2['settings'] = json.dumps(settings)
+                    res = s.post(f"{url}/panel/api/inbounds/update/{inb_id}", json=p2, proxies=proxies, timeout=10)
+                
+                try: 
                     if res.json().get('success'): created_count += 1
-                except:
+                except: 
                     if res.status_code == 200: created_count += 1
             
             if created_count > 0:
-                sub_url = ""
-                if panel_type != 'old':
-                    try:
-                        settings_res = s.get(f"{url}/panel/setting/all", proxies=proxies, timeout=10).json()
-                        sub_domain = settings_res.get('obj', {}).get('subDomain', '')
-                        if not sub_domain: sub_domain = urllib.parse.urlparse(url).hostname
-                        sub_port = settings_res.get('obj', {}).get('subPort', '')
-                        sub_path = settings_res.get('obj', {}).get('subPath', '/sub/')
-                        
-                        port_str = f":{sub_port}" if sub_port and str(sub_port) not in ["80", "443"] else ""
-                        if not sub_path.startswith('/'): sub_path = '/' + sub_path
-                        if not sub_path.endswith('/'): sub_path = sub_path + '/'
-                        sub_url = f"http://{sub_domain}{port_str}{sub_path}{subid}"
-                    except: pass
+                raw_configs = []
+                final_sub_url = ""
                 
-                msg = f"✅ **اکانت با موفقیت ساخته شد!**\n\n👤 نام: `{username}`\n📦 حجم: {'نامحدود' if gb==0 else str(gb)+' GB'}\n⏳ اعتبار: {'نامحدود' if days==0 else str(days)+' روز'}\n🔗 پورت‌های متصل: {created_count} عدد"
-                if sub_url:
-                    msg += f"\n\n🌐 **لینک سابسکریپشن:**\n`{sub_url}`"
-                msg += f"\n\n🔑 **شناسه (UUID/Password):**\n`{uid}`"
-                return True, msg, uid
-            return False, "خطا در API ساخت اکانت پنل (هیچ پورتی متصل نشد)", None
+                if sub_base_url:
+                    if not sub_base_url.endswith('/'): sub_base_url += '/'
+                    final_sub_url = f"{sub_base_url}{subid}"
+                    for _ in range(4):
+                        try:
+                            r_sub = requests.get(final_sub_url, verify=False, timeout=5)
+                            if r_sub.status_code == 200:
+                                text = r_sub.text.strip()
+                                try:
+                                    pad = '=' * (-len(text) % 4)
+                                    decoded = base64.b64decode(text + pad).decode('utf-8')
+                                    lines = decoded.split('\n')
+                                except: lines = text.split('\n')
+                                for line in lines:
+                                    if "://" in line.strip(): raw_configs.append(f"`{line.strip()}`")
+                                if raw_configs: break
+                        except: pass
+                        time.sleep(0.5)
+
+                if not raw_configs:
+                    for inb_id in inb_ids_list:
+                        target_ib = next((x for x in inbounds_data if x['id'] == inb_id), None)
+                        if not target_ib: continue
+                        try:
+                            stream_settings = safe_loads(target_ib.get('streamSettings', '{}'))
+                            conn_address = target_ib.get('listen', '')
+                            if not conn_address or conn_address in ['0.0.0.0', '::']: conn_address = parsed_url.hostname
+                            conn_port = target_ib['port']
+                            ext_proxies = stream_settings.get("externalProxy", [])
+                            if ext_proxies and isinstance(ext_proxies, list) and len(ext_proxies) > 0:
+                                ep = ext_proxies[0]
+                                if ep.get("dest"): conn_address = ep.get("dest")
+                                if ep.get("port"): conn_port = ep.get("port")
+                            inb_remark = target_ib.get('remark', '').strip()
+                            final_remark = f"{inb_remark} -{username}" if inb_remark else username
+                            cfg = generate_raw_config_exact(target_ib.get('protocol', 'vless'), uid, conn_address, conn_port, stream_settings, final_remark)
+                            if cfg: raw_configs.append(cfg)
+                        except: pass
+                
+                gb_str = 'نامحدود' if gb==0 else f"{gb} GB"
+                days_str = 'نامحدود' if days==0 else f"{days} روز"
+                
+                msg1 = (
+                    "✅ اکانت شخصی خریداری شده تقدیم به شما\n\n"
+                    f"👤 نام: `{username}`\n"
+                    f"📦 حجم: {gb_str}\n"
+                    f"⏳ اعتبار: {days_str}\n"
+                    f"🔗 تعداد کانفیگ های فعال ( تانل ) : {created_count} عدد\n"
+                    "📎 برای استعلام حجم و زمان کانفیگ و اعلام وضعیت کانفیگ به شما حتما کانفیگ خودتون رو در بات زیر اد کنید \n"
+                    "🫆 | لینک بات : @TopSpeedSub\\_bot"
+                )
+                
+                msg2 = ""
+                if final_sub_url: msg2 = f"🌐 لینک سابسکریپشن:\n{final_sub_url}"
+                    
+                msg3 = ""
+                if raw_configs: msg3 = "📄 کانفیگ های شخصی شما:\n\n" + "\n\n".join(raw_configs)
+                else: msg3 = "⚠️ *ربات نتوانست کانفیگ‌ها را از لینک ساب استخراج کند. لطفاً دستور /set\\_sub را بررسی کنید.*"
+                    
+                return True, (msg1, msg2, msg3), uid
+                
+            return False, "خطا در ساخت اکانت توسط پنل", None
         except Exception as e: return False, f"خطای ارتباط: {str(e)}", None
 
 def get_main_reply_keyboard():
@@ -550,8 +728,7 @@ def get_main_reply_keyboard():
 def check_admin(m):
     admin_ids = get_admin_ids()
     if not admin_ids or m.chat.id not in admin_ids:
-        text = f"🔒 **دسترسی غیرمجاز!**\n\nآیدی عددی تلگرام شما:\n`{m.chat.id}`\n\nلطفاً این آیدی را کپی کرده و در تنظیمات پنل ثبت کنید."
-        bot.reply_to(m, text, parse_mode="Markdown")
+        bot.reply_to(m, f"🔒 **دسترسی غیرمجاز!**\n\nآیدی عددی تلگرام شما:\n`{m.chat.id}`", parse_mode="Markdown")
         return False
     return True
 
@@ -559,8 +736,33 @@ def check_admin(m):
 def start(m):
     if not check_admin(m): return
     active_targets.pop(m.chat.id, None)
-    text = "به دستیار هوشمند CRM خوش آمدید! 🤖\n\nبرای جستجو و مدیریت، یکی از موارد زیر را بفرستید:\n🔸 **نام کاربری (Email)**\n🔸 **UUID یا Password کلاینت**\n🔸 **متن کانفیگ Vless/Trojan**\n\nیا از منوی پایین برای ساخت اکانت استفاده کنید 👇"
+    text = "به دستیار هوشمند CRM خوش آمدید! 🤖\n\nبرای جستجو و مدیریت، کانفیگ، یوزرنیم یا UUID را بفرستید."
     bot.send_message(m.chat.id, text, parse_mode="Markdown", reply_markup=get_main_reply_keyboard())
+
+@bot.message_handler(commands=['set_sub'])
+def set_sub_command(m):
+    if not check_admin(m): return
+    conn = get_db(); servers = conn.execute("SELECT * FROM servers").fetchall(); conn.close()
+    if not servers: return bot.reply_to(m, "❌ سروری یافت نشد.")
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for s in servers: markup.add(types.InlineKeyboardButton(f"🌐 {s['name']}", callback_data=f"setsub_{s['id']}"))
+    bot.send_message(m.chat.id, "برای اینکه ربات کانفیگ‌ها رو دقیقاً مثل پنل تولید کنه، سرور مورد نظر رو انتخاب کنید:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith('setsub_'))
+def handle_setsub_ask(call):
+    sid = int(call.data.split('_')[1])
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    msg = bot.send_message(call.message.chat.id, "🔗 **آدرس پایه سابسکریپشن این سرور رو وارد کنید:**\n\nمثال: `https://172.235.163.80:2096/sub/`\n\nبرای انصراف بنویسید: لغو", parse_mode="Markdown")
+    bot.register_next_step_handler(msg, lambda m: handle_setsub_save(m, sid))
+
+def handle_setsub_save(m, sid):
+    txt = m.text.strip()
+    if txt == "لغو": return bot.send_message(m.chat.id, "عملیات لغو شد.", reply_markup=get_main_reply_keyboard())
+    if not txt.startswith("http"): return bot.send_message(m.chat.id, "آدرس نامعتبر است. حتماً باید با http یا https شروع شود.")
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("UPDATE servers SET sub_url=? WHERE id=?", (txt, sid))
+    conn.commit(); conn.close()
+    bot.reply_to(m, "✅ **لینک ساب ثبت شد!**\nربات از این به بعد خروجی ۱۰۰٪ دقیق را از این مسیر استخراج می‌کند.", parse_mode="Markdown", reply_markup=get_main_reply_keyboard())
 
 def get_inb_keyboard(chat_id):
     st = create_states.get(chat_id)
@@ -572,7 +774,7 @@ def get_inb_keyboard(chat_id):
     
     row = []
     row.append(types.InlineKeyboardButton("☑️ انتخاب همه", callback_data="cr_all"))
-    row.append(types.InlineKeyboardButton("📥 تایید و ادامه", callback_data="cr_done"))
+    row.append(types.InlineKeyboardButton("📥 تایید", callback_data="cr_done"))
     markup.add(*row)
     markup.add(types.InlineKeyboardButton("❌ انصراف", callback_data="cr_cancel"))
     return markup
@@ -590,23 +792,16 @@ def handle_messages(m):
         return
 
     if txt == "➕ ساخت کانفیگ جدید":
-        conn = get_db(); c = conn.cursor()
-        c.execute("SELECT * FROM servers WHERE allow_sell=1")
-        servers = c.fetchall(); conn.close()
-        if not servers:
-            bot.reply_to(m, "❌ هیچ سروری برای فروش فعال نیست! از داخل پنل تیک 'اجازه ساخت کانفیگ' را بزنید.")
-            return
+        conn = get_db(); servers = conn.execute("SELECT * FROM servers WHERE allow_sell=1").fetchall(); conn.close()
+        if not servers: return bot.reply_to(m, "❌ هیچ سروری برای فروش فعال نیست!")
         markup = types.InlineKeyboardMarkup(row_width=1)
-        for s in servers:
-            markup.add(types.InlineKeyboardButton(f"🌐 {s['name']}", callback_data=f"cr_srv_{s['id']}"))
-        bot.send_message(m.chat.id, "لطفاً سرور مورد نظر برای ساخت اکانت را انتخاب کنید:", reply_markup=markup)
+        for s in servers: markup.add(types.InlineKeyboardButton(f"🌐 {s['name']}", callback_data=f"cr_srv_{s['id']}"))
+        bot.send_message(m.chat.id, "سرور مورد نظر را انتخاب کنید:", reply_markup=markup)
         return
 
     if txt in ["🔄 تمدید اکانت", "⏯ تغییر وضعیت (فعال/غیرفعال)", "❌ حذف اکانت"]:
         target = active_targets.get(m.chat.id)
-        if not target:
-            bot.reply_to(m, "⚠️ هیچ اکانتی انتخاب نشده است! ابتدا جستجو کنید.")
-            return
+        if not target: return bot.reply_to(m, "⚠️ هیچ اکانتی انتخاب نشده است! ابتدا جستجو کنید.")
         if txt == "❌ حذف اکانت":
             wait = bot.send_message(m.chat.id, "⏳ در حال حذف...")
             ok, msg = perform_action(target['sid'], target['uuid'], "delete")
@@ -628,17 +823,18 @@ def handle_messages(m):
     query = urllib.parse.urlparse("vless://" + txt.split("://")[-1]).username if "vless://" in txt.lower() else txt
     query = urllib.parse.urlparse("trojan://" + query.split("://")[-1]).username if "trojan://" in query.lower() else query
     msg_wait = bot.reply_to(m, "⏳ در حال جستجو...", reply_markup=get_main_reply_keyboard())
-    conn = get_db(); c = conn.cursor(); c.execute("SELECT * FROM servers")
-    servers = c.fetchall(); conn.close()
+    conn = get_db(); servers = conn.execute("SELECT * FROM servers").fetchall(); conn.close()
     
-    found = []
+    unique_found = {}
     for srv in servers:
         for cl in fetch_clients(dict(srv)):
-            if query == cl['uuid'] or query.lower() == cl['email'].lower(): found.append(cl)
+            if query == cl['uuid'] or query.lower() == cl['email'].lower():
+                key = f"{cl['server_id']}_{cl['uuid']}"
+                if key not in unique_found: unique_found[key] = cl
+    
+    found = list(unique_found.values())
     bot.delete_message(m.chat.id, msg_wait.message_id)
-    if not found:
-        bot.send_message(m.chat.id, "❌ اکانتی یافت نشد!")
-        return
+    if not found: return bot.send_message(m.chat.id, "❌ اکانتی یافت نشد!")
     if len(found) > 1:
         markup = types.InlineKeyboardMarkup(row_width=1)
         for cl in found: markup.add(types.InlineKeyboardButton(f"سـرور: {cl['server_name']} | یوزر: {cl['email']}", callback_data=f"sel_{cl['server_id']}_{cl['uuid']}"))
@@ -666,31 +862,27 @@ def handle_create_srv(call):
     create_states[call.message.chat.id] = {'sid': sid, 'selected': []}
     wait = bot.send_message(call.message.chat.id, "⏳ در حال دریافت پورت‌های سرور...")
     
-    conn = get_db(); c = conn.cursor(); c.execute("SELECT * FROM servers WHERE id=?", (sid,))
-    srv = c.fetchone(); conn.close()
+    conn = get_db(); srv = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone(); conn.close()
+    if not srv: return bot.send_message(call.message.chat.id, "❌ سرور یافت نشد.")
+    srv = dict(srv)
     url = srv['host'].rstrip('/')
     if not url.startswith("http"): url = "https://" + url
     
-    inbounds = []
+    inbounds = []; err_debug = "نامشخص"
     with XrayTunnel(srv.get('xray_config', '')) as pxy:
         proxies = {"http": pxy, "https": pxy} if pxy else None
-        s = get_session()
+        s = get_session(url)
         try:
-            res_login = s.post(f"{url}/login", data={"username": srv['user'], "password": srv['password']}, proxies=proxies, timeout=10)
-            try: is_logged = res_login.json().get('success')
-            except: is_logged = res_login.status_code == 200
-            
-            if is_logged:
+            res_login = panel_login(s, url, srv['user'], srv['password'], proxies)
+            if res_login and res_login.status_code == 200:
                 inb_res = s.get(f"{url}/panel/api/inbounds/list", proxies=proxies, timeout=10)
-                try: inbounds = inb_res.json().get("obj", [])
-                except: pass
-        except: pass
+                if inb_res.status_code == 200: inbounds = inb_res.json().get("obj", [])
+                else: err_debug = f"ارور {inb_res.status_code}: عدم اجازه دسترسی به API"
+            else: err_debug = f"ارور لاگین. وضعیت: {res_login.status_code if res_login else 'قطع ارتباط'}"
+        except Exception as e: err_debug = f"ارور شبکه: {str(e)}"
     
     bot.delete_message(call.message.chat.id, wait.message_id)
-    if not inbounds:
-        bot.send_message(call.message.chat.id, "❌ خطا در دریافت پورت‌ها! (ممکن است اطلاعات سرور اشتباه باشد)", reply_markup=get_main_reply_keyboard())
-        return
-        
+    if not inbounds: return bot.send_message(call.message.chat.id, f"❌ **خطا در ارتباط با پنل!**\n\n📌 **دیباگ لاگ:**\n`{err_debug}`", parse_mode="Markdown", reply_markup=get_main_reply_keyboard())
     create_states[call.message.chat.id]['inbounds'] = inbounds
     bot.send_message(call.message.chat.id, "🔘 **لطفاً پورت(های) مورد نظر را انتخاب کنید:**", reply_markup=get_inb_keyboard(call.message.chat.id), parse_mode="Markdown")
 
@@ -705,22 +897,16 @@ def handle_create_actions(call):
         bot.delete_message(cid, call.message.message_id)
         create_states.pop(cid, None)
         bot.send_message(cid, "عملیات لغو شد.", reply_markup=get_main_reply_keyboard())
-        return
-        
     elif action == "cr_all":
         all_ids = [ib['id'] for ib in st.get('inbounds', [])]
         if set(st['selected']) == set(all_ids): st['selected'] = []
         else: st['selected'] = all_ids
         bot.edit_message_reply_markup(cid, call.message.message_id, reply_markup=get_inb_keyboard(cid))
-        
     elif action == "cr_done":
-        if not st['selected']:
-            bot.answer_callback_query(call.id, "حداقل یک پورت را انتخاب کنید!", show_alert=True)
-            return
+        if not st['selected']: return bot.answer_callback_query(call.id, "حداقل یک پورت را انتخاب کنید!", show_alert=True)
         bot.delete_message(cid, call.message.message_id)
-        msg = bot.send_message(cid, "📝 **نام کاربری (Email) را به انگلیسی وارد کنید:**\n(لغو)", reply_markup=types.ReplyKeyboardRemove(), parse_mode="Markdown")
+        msg = bot.send_message(cid, "📝 **نام کاربری (Email) را وارد کنید:**\n(لغو)", reply_markup=types.ReplyKeyboardRemove(), parse_mode="Markdown")
         bot.register_next_step_handler(msg, cr_step_name)
-        
     elif action.startswith('cr_inb_'):
         inb_id = int(action.split('_')[2])
         if inb_id in st['selected']: st['selected'].remove(inb_id)
@@ -752,9 +938,30 @@ def cr_step_gb(m):
     if not st: return
     
     wait = bot.send_message(m.chat.id, "⏳ در حال ساخت کانفیگ در سرور...")
-    ok, msg_resp, uid = create_config(st['sid'], st['selected'], st['name'], st['days'], int(txt), st['inbounds'])
+    ok, response_data, uid = create_config(st['sid'], st['selected'], st['name'], st['days'], int(txt))
     bot.delete_message(m.chat.id, wait.message_id)
-    bot.send_message(m.chat.id, msg_resp, parse_mode="Markdown", reply_markup=get_main_reply_keyboard())
+    
+    if ok:
+        msg1, msg2, msg3 = response_data
+        try: bot.send_message(m.chat.id, "🚀")
+        except: pass
+        
+        try:
+            if msg1: bot.send_message(m.chat.id, msg1, parse_mode="Markdown", disable_web_page_preview=True)
+        except Exception as e: bot.send_message(m.chat.id, f"⚠️ هشدار در ارسال پیام ۱:\n{e}")
+        
+        try:
+            if msg2: bot.send_message(m.chat.id, msg2, disable_web_page_preview=True)
+        except Exception as e: bot.send_message(m.chat.id, f"⚠️ هشدار در ارسال پیام ۲:\n{e}")
+        
+        try:
+            if msg3: bot.send_message(m.chat.id, msg3, parse_mode="Markdown", disable_web_page_preview=True)
+        except Exception as e: bot.send_message(m.chat.id, f"⚠️ هشدار در ارسال پیام ۳:\n{e}")
+        
+        bot.send_message(m.chat.id, "عملیات با موفقیت پایان یافت.", reply_markup=get_main_reply_keyboard())
+    else:
+        bot.send_message(m.chat.id, response_data, parse_mode="Markdown", reply_markup=get_main_reply_keyboard())
+        
     create_states.pop(m.chat.id, None)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith('sel_'))
@@ -818,6 +1025,8 @@ def init_db():
     try: c.execute("ALTER TABLE servers ADD COLUMN allow_sell INTEGER DEFAULT 1")
     except: pass
     try: c.execute("ALTER TABLE servers ADD COLUMN panel_type TEXT DEFAULT 'new'")
+    except: pass
+    try: c.execute("ALTER TABLE servers ADD COLUMN sub_url TEXT")
     except: pass
     c.execute('CREATE TABLE IF NOT EXISTS admin (username TEXT, password TEXT)')
     c.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
