@@ -47,8 +47,10 @@ fi
 mkdir -p /root/UserRenew
 cd /root/UserRenew
 
-# --- panel.html ---
-cat << 'EOF' > panel.html
+# ==========================================
+# 1. Panel HTML
+# ==========================================
+cat << 'EOF_HTML' > panel.html
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
@@ -301,10 +303,12 @@ cat << 'EOF' > panel.html
     </script>
 </body>
 </html>
-EOF
+EOF_HTML
 
-# --- xray_bot.py ---
-cat << 'EOF' > xray_bot.py
+# ==========================================
+# 2. Xray Bot Script
+# ==========================================
+cat << 'EOF_BOT' > xray_bot.py
 import telebot
 from telebot import types
 import sqlite3, os, requests, json, urllib3, socket, subprocess, time, urllib.parse, uuid, random, string, re, base64
@@ -319,21 +323,6 @@ except: pass
 
 BOT_TOKEN = "BOT_TOKEN_PLACEHOLDER"
 DB_PATH = "/root/UserRenew/users.db"
-
-bot = None
-with open(__file__, 'r') as f:
-    for line in f:
-        if line.startswith('BOT_TOKEN =') and 'PLACEHOLDER' not in line:
-            BOT_TOKEN = line.split('"')[1]
-            break
-
-if not BOT_TOKEN or BOT_TOKEN == "BOT_TOKEN_PLACEHOLDER":
-    try:
-        with open("/root/UserRenew/xray_bot.py.bak", "r") as f:
-            for line in f:
-                if line.startswith('BOT_TOKEN ='):
-                    BOT_TOKEN = line.split('"')[1]
-    except: pass
 
 bot = telebot.TeleBot(BOT_TOKEN)
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
@@ -483,7 +472,6 @@ def fetch_clients(server):
             return clients_info
         except: return []
 
-# --- منطق اصلاح شده‌ی تمدید/حذف ---
 def perform_action(server_id, uuid_str, action, **kwargs):
     conn = get_db(); c = conn.cursor()
     c.execute("SELECT * FROM servers WHERE id=?", (server_id,))
@@ -500,7 +488,8 @@ def perform_action(server_id, uuid_str, action, **kwargs):
         s = get_session(url)
         try:
             res_login = panel_login(s, url, srv['user'], srv['password'], proxies)
-            if not res_login or res_login.status_code != 200: return False, "خطا در ورود به پنل"
+            if not res_login or res_login.status_code != 200: 
+                return False, f"خطا در ورود به پنل (کد {res_login.status_code if res_login else 'نامشخص'})"
             
             inbounds = s.get(f"{url}/panel/api/inbounds/list", proxies=proxies, timeout=10).json().get("obj", [])
             
@@ -524,21 +513,35 @@ def perform_action(server_id, uuid_str, action, **kwargs):
                 
                 if action == "delete":
                     if panel_type == 'new':
-                        s.post(f"{url}/panel/api/inbounds/{target_inb}/delClient/{uuid_str}", proxies=proxies, timeout=10)
+                        res = s.post(f"{url}/panel/api/inbounds/{target_inb}/delClient/{uuid_str}", proxies=proxies, timeout=10)
+                        success = False
+                        try: success = res.json().get('success')
+                        except: success = (res.status_code == 200)
+                        if not success:
+                            new_clients = [c for c in clients_list if (c.get('id') != uuid_str and c.get('password') != uuid_str)]
+                            full_inbound_update(s, url, target_inb, ib, new_clients, panel_type, proxies)
                     else:
                         new_clients = [c for c in clients_list if (c.get('id') != uuid_str and c.get('password') != uuid_str)]
                         full_inbound_update(s, url, target_inb, ib, new_clients, panel_type, proxies)
                     msg_out = "کانفیگ با موفقیت حذف شد. 🗑"
 
                 elif action == "toggle":
+                    target_cl = None
                     for c in clients_list:
-                        if c.get('id') == uuid_str or c.get('password') == uuid_str:
+                        c_id = c.get('id') or c.get('password') or ''
+                        if c_id == uuid_str:
                             c['enable'] = new_enable_state
-                            cl = c
-                    
+                            target_cl = c
+                            break
+                            
                     if panel_type == 'new':
-                        payload = {"id": target_inb, "settings": json.dumps({"clients": [cl]})}
-                        s.post(f"{url}/panel/api/inbounds/updateClient/{uuid_str}", json=payload, proxies=proxies, timeout=10)
+                        payload = {"id": target_inb, "settings": json.dumps({"clients": [target_cl]})}
+                        res = s.post(f"{url}/panel/api/inbounds/updateClient/{uuid_str}", json=payload, proxies=proxies, timeout=10)
+                        success = False
+                        try: success = res.json().get('success')
+                        except: success = (res.status_code == 200)
+                        if not success:
+                            full_inbound_update(s, url, target_inb, ib, clients_list, panel_type, proxies)
                     else:
                         full_inbound_update(s, url, target_inb, ib, clients_list, panel_type, proxies)
                         
@@ -550,23 +553,33 @@ def perform_action(server_id, uuid_str, action, **kwargs):
                     exp_val = int(time.time() * 1000) + (days * 24 * 3600 * 1000) if days > 0 else 0
                     gb_val = gb * (1024 ** 3) if gb > 0 else 0
                     
+                    target_cl = None
                     for c in clients_list:
-                        if c.get('id') == uuid_str or c.get('password') == uuid_str:
+                        c_id = c.get('id') or c.get('password') or ''
+                        if c_id == uuid_str:
                             c['enable'] = True
                             c['expiryTime'] = exp_val
                             c['totalGB'] = gb_val
-                            cl = c
+                            target_cl = c
+                            break
                             
                     if panel_type == 'new':
-                        payload = {"id": target_inb, "settings": json.dumps({"clients": [cl]})}
-                        s.post(f"{url}/panel/api/inbounds/updateClient/{uuid_str}", json=payload, proxies=proxies, timeout=10)
+                        payload = {"id": target_inb, "settings": json.dumps({"clients": [target_cl]})}
+                        res = s.post(f"{url}/panel/api/inbounds/updateClient/{uuid_str}", json=payload, proxies=proxies, timeout=10)
+                        success = False
+                        try: success = res.json().get('success')
+                        except: success = (res.status_code == 200)
+                        
+                        if not success:
+                            full_inbound_update(s, url, target_inb, ib, clients_list, panel_type, proxies)
+                            
+                        try: s.post(f"{url}/panel/api/inbounds/{target_inb}/resetClientTraffic/{target_cl['email']}", proxies=proxies, timeout=10)
+                        except: pass
                     else:
                         full_inbound_update(s, url, target_inb, ib, clients_list, panel_type, proxies)
-                    
-                    try:
-                        s.post(f"{url}/panel/api/inbounds/{target_inb}/resetClientTraffic/{cl['email']}", proxies=proxies, timeout=10)
-                    except: pass
-                    
+                        try: s.post(f"{url}/panel/api/inbounds/{target_inb}/resetClientTraffic/{target_cl['email']}", proxies=proxies, timeout=10)
+                        except: pass
+                        
                     msg_out = "✅ **اکانت با موفقیت تمدید و حجم آن ریست شد.**"
                     
             return True, msg_out
@@ -635,7 +648,6 @@ def generate_raw_config_exact(protocol, uid, address, port, stream_settings, rem
     else: return ""
     return f"`{link}`"
 
-# --- بخش ساخت کانفیگ ۱۰۰٪ سالم ---
 def create_config(server_id, inb_ids_list, username, days, gb):
     conn = get_db(); c = conn.cursor()
     c.execute("SELECT * FROM servers WHERE id=?", (server_id,))
@@ -1055,6 +1067,223 @@ def step_gb(m):
 def ignore_clicks(call): bot.answer_callback_query(call.id, "این دکمه نمایشی است 📊")
 
 bot.infinity_polling()
-EOF
+EOF_BOT
 
-systemctl restart userrenew-bot
+# ==========================================
+# 3. Main Backend Script
+# ==========================================
+cat << 'EOF_MAIN' > main.py
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
+import sqlite3, uvicorn, os, glob
+
+for f in glob.glob('/tmp/userrenew_*.json'):
+    try: os.remove(f)
+    except: pass
+os.system("pkill -f 'xray run -c /tmp/userrenew_'")
+
+app = FastAPI()
+DB_PATH = 'users.db'
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('CREATE TABLE IF NOT EXISTS servers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, host TEXT, user TEXT, password TEXT, xray_config TEXT, allow_sell INTEGER DEFAULT 1)')
+    try: c.execute("ALTER TABLE servers ADD COLUMN allow_sell INTEGER DEFAULT 1")
+    except: pass
+    try: c.execute("ALTER TABLE servers ADD COLUMN panel_type TEXT DEFAULT 'new'")
+    except: pass
+    try: c.execute("ALTER TABLE servers ADD COLUMN sub_url TEXT")
+    except: pass
+    c.execute('CREATE TABLE IF NOT EXISTS admin (username TEXT, password TEXT)')
+    c.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
+    if c.execute('SELECT count(*) FROM admin').fetchone()[0] == 0:
+        c.execute("INSERT INTO admin VALUES ('ADMIN_PLACEHOLDER', 'PASS_PLACEHOLDER')")
+    conn.commit(); conn.close()
+init_db()
+
+class LoginModel(BaseModel): username: str; password: str
+class ServerModel(BaseModel): name: str; host: str; user: str; password: str; xray_config: str; allow_sell: bool; panel_type: str = 'new'
+class SettingsModel(BaseModel): admin_ids: str
+
+@app.post("/api/login")
+def login(data: LoginModel):
+    conn = sqlite3.connect(DB_PATH); c = conn.cursor()
+    c.execute("SELECT * FROM admin WHERE username=? AND password=?", (data.username, data.password))
+    valid = c.fetchone() is not None; conn.close()
+    return {"success": valid}
+
+@app.get("/api/settings")
+def get_settings():
+    conn = sqlite3.connect(DB_PATH); c = conn.cursor()
+    c.execute("SELECT value FROM settings WHERE key='admin_ids'")
+    row = c.fetchone(); conn.close()
+    return {"admin_ids": row[0] if row else ""}
+
+@app.post("/api/settings")
+def save_settings(s: SettingsModel):
+    conn = sqlite3.connect(DB_PATH); c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_ids', ?)", (s.admin_ids,))
+    conn.commit(); conn.close(); return {"success": True}
+
+@app.get("/api/servers")
+def get_servers():
+    conn = sqlite3.connect(DB_PATH); conn.row_factory = sqlite3.Row; c = conn.cursor()
+    servers = [dict(r) for r in c.execute("SELECT * FROM servers ORDER BY id DESC").fetchall()]; conn.close()
+    return servers
+
+@app.post("/api/servers")
+def add_server(s: ServerModel):
+    conn = sqlite3.connect(DB_PATH); c = conn.cursor()
+    c.execute("INSERT INTO servers (name, host, user, password, xray_config, allow_sell, panel_type) VALUES (?, ?, ?, ?, ?, ?, ?)", (s.name, s.host, s.user, s.password, s.xray_config, 1 if s.allow_sell else 0, s.panel_type))
+    conn.commit(); conn.close(); return {"success": True}
+
+@app.put("/api/servers/{server_id}")
+def edit_server(server_id: int, s: ServerModel):
+    conn = sqlite3.connect(DB_PATH); c = conn.cursor()
+    c.execute("UPDATE servers SET name=?, host=?, user=?, password=?, xray_config=?, allow_sell=?, panel_type=? WHERE id=?", (s.name, s.host, s.user, s.password, s.xray_config, 1 if s.allow_sell else 0, s.panel_type, server_id))
+    conn.commit(); conn.close(); return {"success": True}
+
+@app.delete("/api/servers/{server_id}")
+def del_server(server_id: int):
+    conn = sqlite3.connect(DB_PATH); c = conn.cursor()
+    c.execute("DELETE FROM servers WHERE id=?", (server_id,))
+    conn.commit(); conn.close(); return {"success": True}
+
+@app.get("/", response_class=HTMLResponse)
+def serve_panel():
+    with open("panel.html", "r", encoding="utf-8") as f: return f.read()
+
+if __name__ == "__main__": uvicorn.run(app, host="0.0.0.0", port=PORT_PLACEHOLDER)
+EOF_MAIN
+
+# Replace Placeholders
+sed -i "s/BOT_TOKEN_PLACEHOLDER/$BOT_TOKEN/g" /root/UserRenew/xray_bot.py
+sed -i "s/PORT_PLACEHOLDER/$PANEL_PORT/g" /root/UserRenew/main.py
+sed -i "s/ADMIN_PLACEHOLDER/$PANEL_USER/g" /root/UserRenew/main.py
+sed -i "s/PASS_PLACEHOLDER/$PANEL_PASS/g" /root/UserRenew/main.py
+
+# Install Python Dependencies
+python3 -m venv venv
+source venv/bin/activate
+pip install -q telebot "requests[socks]" fastapi uvicorn pydantic
+
+# ==========================================
+# 4. Interactive CLI Menu
+# ==========================================
+cat << 'EOF_MENU' > /usr/bin/userrenew
+#!/bin/bash
+PURPLE="\e[35m"
+GREEN="\e[32m"
+RED="\e[31m"
+CYAN="\e[36m"
+YELLOW="\e[33m"
+RESET="\e[0m"
+
+change_token() {
+    read -p "Enter New Bot Token: " new_token
+    sed -i "s/BOT_TOKEN = \".*\"/BOT_TOKEN = \"$new_token\"/g" /root/UserRenew/xray_bot.py
+    systemctl restart userrenew-bot
+    echo -e "${GREEN}[+] Bot token updated successfully!${RESET}"
+    sleep 2
+}
+
+change_port() {
+    read -p "Enter New Panel Port: " new_port
+    sed -i "s/port=[0-9]*/port=$new_port/g" /root/UserRenew/main.py
+    systemctl restart userrenew-panel
+    echo -e "${GREEN}[+] Panel port updated to $new_port successfully!${RESET}"
+    sleep 2
+}
+
+change_creds() {
+    read -p "Enter New Admin Username: " new_user
+    read -p "Enter New Admin Password: " new_pass
+    safe_user=$(echo "$new_user" | sed "s/'/''/g")
+    safe_pass=$(echo "$new_pass" | sed "s/'/''/g")
+    sqlite3 /root/UserRenew/users.db "UPDATE admin SET username='$safe_user', password='$safe_pass';"
+    echo -e "${GREEN}[+] Admin credentials updated successfully!${RESET}"
+    sleep 2
+}
+
+uninstall_all() {
+    echo -e "${RED}[!] WARNING: This will delete everything (including database).${RESET}"
+    read -p "Are you sure? (y/n): " confirm
+    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+        systemctl stop userrenew-panel userrenew-bot
+        systemctl disable userrenew-panel userrenew-bot
+        rm -f /etc/systemd/system/userrenew-*
+        systemctl daemon-reload
+        rm -rf /root/UserRenew
+        rm -f /usr/bin/userrenew
+        echo -e "${GREEN}[+] UserRenew completely uninstalled.${RESET}"
+        exit 0
+    fi
+}
+
+while true; do
+    clear
+    echo -e "${CYAN}====================================================${RESET}"
+    echo -e "${PURPLE}             UserRenew Management                   ${RESET}"
+    echo -e "${CYAN}====================================================${RESET}"
+    echo -e "1. ${YELLOW}Change Telegram Bot Token${RESET}"
+    echo -e "2. ${YELLOW}Change Panel Web Port${RESET}"
+    echo -e "3. ${YELLOW}Change Panel Username & Password${RESET}"
+    echo -e "4. ${GREEN}Restart Services${RESET}"
+    echo -e "5. ${RED}Uninstall Entire System${RESET}"
+    echo -e "6. Exit"
+    echo -e "${CYAN}====================================================${RESET}"
+    read -p "Select an option [1-6]: " choice
+    case $choice in
+        1) change_token ;;
+        2) change_port ;;
+        3) change_creds ;;
+        4) systemctl restart userrenew-panel userrenew-bot && echo -e "${GREEN}[+] Services Restarted!${RESET}" && sleep 2 ;;
+        5) uninstall_all ;;
+        6) exit 0 ;;
+        *) echo -e "${RED}Invalid option!${RESET}" && sleep 1 ;;
+    esac
+done
+EOF_MENU
+chmod +x /usr/bin/userrenew
+
+# ==========================================
+# 5. Systemd Services
+# ==========================================
+cat << 'EOF_PANEL_SVC' > /etc/systemd/system/userrenew-panel.service
+[Unit]
+Description=UserRenew Panel Web
+After=network.target
+[Service]
+WorkingDirectory=/root/UserRenew
+ExecStart=/root/UserRenew/venv/bin/python /root/UserRenew/main.py
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF_PANEL_SVC
+
+cat << 'EOF_BOT_SVC' > /etc/systemd/system/userrenew-bot.service
+[Unit]
+Description=UserRenew Telegram Bot
+After=network.target
+[Service]
+WorkingDirectory=/root/UserRenew
+ExecStart=/root/UserRenew/venv/bin/python /root/UserRenew/xray_bot.py
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF_BOT_SVC
+
+systemctl daemon-reload
+systemctl enable userrenew-panel userrenew-bot > /dev/null 2>&1
+systemctl restart userrenew-panel userrenew-bot
+
+IPV4=$(curl -4 -s icanhazip.com || curl -s -4 ifconfig.me)
+
+echo -e "${GREEN}====================================================${RESET}"
+echo -e "${GREEN}   Installation Completed Successfully!             ${RESET}"
+echo -e "${PURPLE}[+] Panel URL:${RESET} http://$IPV4:$PANEL_PORT"
+echo -e "${PURPLE}[+] Admin Username:${RESET} $PANEL_USER"
+echo -e "${PURPLE}[+] Type ${GREEN}userrenew${PURPLE} in terminal for CLI menu.${RESET}"
+echo -e "${GREEN}====================================================${RESET}"
