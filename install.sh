@@ -319,8 +319,23 @@ except: pass
 
 BOT_TOKEN = "BOT_TOKEN_PLACEHOLDER"
 DB_PATH = "/root/UserRenew/users.db"
-bot = telebot.TeleBot(BOT_TOKEN)
 
+bot = None
+with open(__file__, 'r') as f:
+    for line in f:
+        if line.startswith('BOT_TOKEN =') and 'PLACEHOLDER' not in line:
+            BOT_TOKEN = line.split('"')[1]
+            break
+
+if not BOT_TOKEN or BOT_TOKEN == "BOT_TOKEN_PLACEHOLDER":
+    try:
+        with open("/root/UserRenew/xray_bot.py.bak", "r") as f:
+            for line in f:
+                if line.startswith('BOT_TOKEN ='):
+                    BOT_TOKEN = line.split('"')[1]
+    except: pass
+
+bot = telebot.TeleBot(BOT_TOKEN)
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
 
 active_targets = {}
@@ -331,6 +346,16 @@ def safe_loads(val):
     if isinstance(val, (dict, list)): return val
     try: return json.loads(val) if val else {}
     except: return {}
+
+def safe_send(chat_id, text, reply_markup=None):
+    if not text: return
+    try:
+        bot.send_message(chat_id, text, parse_mode="Markdown", disable_web_page_preview=True, reply_markup=reply_markup)
+    except:
+        try:
+            bot.send_message(chat_id, text, disable_web_page_preview=True, reply_markup=reply_markup)
+        except Exception as e:
+            print("Failed to send message:", e)
 
 def get_session(base_url=None):
     s = requests.Session()
@@ -343,10 +368,7 @@ def get_session(base_url=None):
     })
     if base_url:
         parsed = urllib.parse.urlparse(base_url)
-        s.headers.update({
-            "Origin": f"{parsed.scheme}://{parsed.netloc}",
-            "Referer": f"{base_url}/"
-        })
+        s.headers.update({"Origin": f"{parsed.scheme}://{parsed.netloc}", "Referer": f"{base_url}/"})
     return s
 
 def panel_login(s, url, username, password, proxies=None):
@@ -411,6 +433,25 @@ class XrayTunnel:
         if self.p: self.p.terminate()
         if self.cfg and os.path.exists(self.cfg): os.remove(self.cfg)
 
+def full_inbound_update(s, url, inb_id, original_ib, new_clients, panel_type, proxies):
+    p2 = original_ib.copy()
+    p2.pop('clientStats', None)
+    
+    old_settings = safe_loads(p2.get('settings', '{}'))
+    old_settings['clients'] = new_clients
+    p2['settings'] = json.dumps(old_settings)
+    
+    for k in ['streamSettings', 'sniffing', 'allocate']:
+        if k in p2 and isinstance(p2[k], dict):
+            p2[k] = json.dumps(p2[k])
+
+    if panel_type == 'old':
+        p2["enable"] = "true" if p2.get("enable", True) else "false"
+        return s.post(f"{url}/panel/api/inbounds/update/{inb_id}", data=p2, proxies=proxies, timeout=10)
+    else:
+        p2["enable"] = bool(p2.get("enable", True))
+        return s.post(f"{url}/panel/api/inbounds/update/{inb_id}", json=p2, proxies=proxies, timeout=10)
+
 def fetch_clients(server):
     url = server['host'].rstrip('/')
     if not url.startswith("http"): url = "https://" + url
@@ -422,7 +463,6 @@ def fetch_clients(server):
             if not res_login: return []
             try: is_logged = res_login.json().get('success')
             except: is_logged = res_login.status_code == 200
-            
             if not is_logged: return []
             
             res = s.get(f"{url}/panel/api/inbounds/list", proxies=proxies, timeout=10).json()
@@ -443,14 +483,17 @@ def fetch_clients(server):
             return clients_info
         except: return []
 
+# --- منطق اصلاح شده‌ی تمدید/حذف ---
 def perform_action(server_id, uuid_str, action, **kwargs):
     conn = get_db(); c = conn.cursor()
     c.execute("SELECT * FROM servers WHERE id=?", (server_id,))
     srv = c.fetchone(); conn.close()
     if not srv: return False, "سرور یافت نشد"
 
+    srv = dict(srv)
     url = srv['host'].rstrip('/')
     if not url.startswith("http"): url = "https://" + url
+    panel_type = srv.get('panel_type', 'new')
 
     with XrayTunnel(srv.get('xray_config', '')) as pxy:
         proxies = {"http": pxy, "https": pxy} if pxy else None
@@ -465,63 +508,69 @@ def perform_action(server_id, uuid_str, action, **kwargs):
             for ib in inbounds:
                 settings = safe_loads(ib.get('settings', '{}'))
                 for cl in settings.get('clients', []):
-                    client_id = cl.get('id') or cl.get('password') or ''
-                    if client_id == uuid_str:
+                    c_id = cl.get('id') or cl.get('password') or ''
+                    if c_id == uuid_str:
                         targets.append((ib, cl))
                         break
             
             if not targets: return False, "کلاینت در سرور یافت نشد"
-            
             msg_out = ""
-            new_enable_state = not targets[0][1]['enable']
+            new_enable_state = not targets[0][1].get('enable', True)
             
             for ib, cl in targets:
                 target_inb = ib['id']
+                old_settings = safe_loads(ib.get('settings', '{}'))
+                clients_list = old_settings.get('clients', [])
+                
                 if action == "delete":
-                    res = s.post(f"{url}/panel/api/inbounds/{target_inb}/delClient/{uuid_str}", proxies=proxies, timeout=10)
-                    if res.status_code == 404: 
-                        settings = safe_loads(ib.get('settings', '{}'))
-                        settings['clients'] = [c for c in settings.get('clients', []) if c.get('id') != uuid_str and c.get('password') != uuid_str]
-                        p2 = ib.copy()
-                        p2['settings'] = json.dumps(settings)
-                        s.post(f"{url}/panel/api/inbounds/update/{target_inb}", json=p2, proxies=proxies, timeout=10)
+                    if panel_type == 'new':
+                        s.post(f"{url}/panel/api/inbounds/{target_inb}/delClient/{uuid_str}", proxies=proxies, timeout=10)
+                    else:
+                        new_clients = [c for c in clients_list if (c.get('id') != uuid_str and c.get('password') != uuid_str)]
+                        full_inbound_update(s, url, target_inb, ib, new_clients, panel_type, proxies)
                     msg_out = "کانفیگ با موفقیت حذف شد. 🗑"
-                    
+
                 elif action == "toggle":
-                    cl['enable'] = new_enable_state
-                    payload = {"id": target_inb, "settings": json.dumps({"clients": [cl]})}
-                    res = s.post(f"{url}/panel/api/inbounds/updateClient/{uuid_str}", json=payload, proxies=proxies, timeout=10)
-                    if res.status_code == 404:
-                        settings = safe_loads(ib.get('settings', '{}'))
-                        for cx in settings.get('clients', []):
-                            if cx.get('id') == uuid_str or cx.get('password') == uuid_str: cx['enable'] = new_enable_state
-                        p2 = ib.copy()
-                        p2['settings'] = json.dumps(settings)
-                        res = s.post(f"{url}/panel/api/inbounds/update/{target_inb}", json=p2, proxies=proxies, timeout=10)
+                    for c in clients_list:
+                        if c.get('id') == uuid_str or c.get('password') == uuid_str:
+                            c['enable'] = new_enable_state
+                            cl = c
+                    
+                    if panel_type == 'new':
+                        payload = {"id": target_inb, "settings": json.dumps({"clients": [cl]})}
+                        s.post(f"{url}/panel/api/inbounds/updateClient/{uuid_str}", json=payload, proxies=proxies, timeout=10)
+                    else:
+                        full_inbound_update(s, url, target_inb, ib, clients_list, panel_type, proxies)
+                        
                     state_msg = "فعال ✅" if new_enable_state else "غیرفعال ⏸"
                     msg_out = f"وضعیت اکانت با موفقیت تغییر کرد و اکنون **{state_msg}** است."
-                    
+
                 elif action == "extend":
                     days, gb = kwargs['days'], kwargs['gb']
-                    cl['enable'] = True
-                    cl['expiryTime'] = int(time.time() * 1000) + (days * 24 * 3600 * 1000) if days > 0 else 0
-                    cl['totalGB'] = gb * (1024 ** 3) if gb > 0 else 0
-                    payload = {"id": target_inb, "settings": json.dumps({"clients": [cl]})}
-                    res = s.post(f"{url}/panel/api/inbounds/updateClient/{uuid_str}", json=payload, proxies=proxies, timeout=10)
-                    if res.status_code == 404:
-                        settings = safe_loads(ib.get('settings', '{}'))
-                        for cx in settings.get('clients', []):
-                            if cx.get('id') == uuid_str or cx.get('password') == uuid_str:
-                                cx['enable'] = True; cx['expiryTime'] = cl['expiryTime']; cx['totalGB'] = cl['totalGB']
-                        p2 = ib.copy()
-                        p2['settings'] = json.dumps(settings)
-                        res = s.post(f"{url}/panel/api/inbounds/update/{target_inb}", json=p2, proxies=proxies, timeout=10)
+                    exp_val = int(time.time() * 1000) + (days * 24 * 3600 * 1000) if days > 0 else 0
+                    gb_val = gb * (1024 ** 3) if gb > 0 else 0
                     
-                    s.post(f"{url}/panel/api/inbounds/{target_inb}/resetClientTraffic/{cl['email']}", proxies=proxies, timeout=10)
+                    for c in clients_list:
+                        if c.get('id') == uuid_str or c.get('password') == uuid_str:
+                            c['enable'] = True
+                            c['expiryTime'] = exp_val
+                            c['totalGB'] = gb_val
+                            cl = c
+                            
+                    if panel_type == 'new':
+                        payload = {"id": target_inb, "settings": json.dumps({"clients": [cl]})}
+                        s.post(f"{url}/panel/api/inbounds/updateClient/{uuid_str}", json=payload, proxies=proxies, timeout=10)
+                    else:
+                        full_inbound_update(s, url, target_inb, ib, clients_list, panel_type, proxies)
+                    
+                    try:
+                        s.post(f"{url}/panel/api/inbounds/{target_inb}/resetClientTraffic/{cl['email']}", proxies=proxies, timeout=10)
+                    except: pass
+                    
                     msg_out = "✅ **اکانت با موفقیت تمدید و حجم آن ریست شد.**"
                     
             return True, msg_out
-        except Exception as e: return False, f"خطا: {str(e)}"
+        except Exception as e: return False, f"خطا در پردازش تغییرات پنل: {str(e)}"
 
 def generate_raw_config_exact(protocol, uid, address, port, stream_settings, remark):
     net = stream_settings.get("network", "tcp")
@@ -586,6 +635,7 @@ def generate_raw_config_exact(protocol, uid, address, port, stream_settings, rem
     else: return ""
     return f"`{link}`"
 
+# --- بخش ساخت کانفیگ ۱۰۰٪ سالم ---
 def create_config(server_id, inb_ids_list, username, days, gb):
     conn = get_db(); c = conn.cursor()
     c.execute("SELECT * FROM servers WHERE id=?", (server_id,))
@@ -608,7 +658,6 @@ def create_config(server_id, inb_ids_list, username, days, gb):
             
             inbounds_data = s.get(f"{url}/panel/api/inbounds/list", proxies=proxies, timeout=10).json().get("obj", [])
             
-            # 🔒 Check Duplicate
             for ib in inbounds_data:
                 settings = safe_loads(ib.get('settings', '{}'))
                 for cl in settings.get('clients', []):
@@ -622,33 +671,37 @@ def create_config(server_id, inb_ids_list, username, days, gb):
             for inb_id in inb_ids_list:
                 target_ib = next((x for x in inbounds_data if x['id'] == inb_id), None)
                 protocol = target_ib['protocol'] if target_ib else 'vless'
+                
                 client_dict = {
                     "email": username, "enable": True,
                     "expiryTime": int(time.time() * 1000) + (days * 86400000) if days > 0 else 0,
-                    "totalGB": gb * 1073741824 if gb > 0 else 0
+                    "totalGB": gb * 1073741824 if gb > 0 else 0,
+                    "subId": subid, "tgId": 0, "limitIp": 0, "reset": 0
                 }
+                
                 if protocol in ["vless", "vmess"]:
                     client_dict["id"] = uid
                     if protocol == "vless" and panel_type != 'old': client_dict["flow"] = ""
                 elif protocol in ["trojan", "shadowsocks"]: client_dict["password"] = uid.replace("-", "")[:16]
-                    
-                if panel_type != 'old':
-                    client_dict["subId"] = subid; client_dict["tgId"] = 0; client_dict["limitIp"] = 1; client_dict["reset"] = 0
                 
-                payload = {"id": inb_id, "settings": json.dumps({"clients": [client_dict]})}
-                res = s.post(f"{url}/panel/api/inbounds/addClient", json=payload, proxies=proxies, timeout=10)
-                if res.status_code == 404: 
-                    settings = safe_loads(target_ib.get('settings', '{}'))
-                    if 'clients' not in settings: settings['clients'] = []
-                    settings['clients'].append(client_dict)
-                    p2 = target_ib.copy()
-                    p2['settings'] = json.dumps(settings)
-                    res = s.post(f"{url}/panel/api/inbounds/update/{inb_id}", json=p2, proxies=proxies, timeout=10)
+                success_added = False
                 
-                try: 
-                    if res.json().get('success'): created_count += 1
-                except: 
-                    if res.status_code == 200: created_count += 1
+                if panel_type == 'new':
+                    payload = {"id": inb_id, "settings": json.dumps({"clients": [client_dict]})}
+                    res = s.post(f"{url}/panel/api/inbounds/addClient", json=payload, proxies=proxies, timeout=10)
+                    try: success_added = res.json().get('success', False)
+                    except: success_added = (res.status_code == 200)
+                        
+                if not success_added:
+                    old_settings = safe_loads(target_ib.get('settings', '{}'))
+                    clients_list = old_settings.get('clients', [])
+                    clients_list.append(client_dict)
+                    res = full_inbound_update(s, url, inb_id, target_ib, clients_list, panel_type, proxies)
+                    try: success_added = res.json().get('success', False)
+                    except: success_added = (res.status_code == 200)
+                
+                if success_added:
+                    created_count += 1
             
             if created_count > 0:
                 raw_configs = []
@@ -659,7 +712,7 @@ def create_config(server_id, inb_ids_list, username, days, gb):
                     final_sub_url = f"{sub_base_url}{subid}"
                     for _ in range(4):
                         try:
-                            r_sub = requests.get(final_sub_url, verify=False, timeout=5)
+                            r_sub = requests.get(final_sub_url, verify=False, proxies=proxies, timeout=5)
                             if r_sub.status_code == 200:
                                 text = r_sub.text.strip()
                                 try:
@@ -722,7 +775,7 @@ def get_main_reply_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add("➕ ساخت کانفیگ جدید")
     markup.add("🔄 تمدید اکانت", "⏯ تغییر وضعیت (فعال/غیرفعال)")
-    markup.add("❌ حذف اکانت", "🔙 پایان مدیریت")
+    markup.add("❌ حذف اکانت", "🔄 استارت مجدد")
     return markup
 
 def check_admin(m):
@@ -736,6 +789,9 @@ def check_admin(m):
 def start(m):
     if not check_admin(m): return
     active_targets.pop(m.chat.id, None)
+    step_states.pop(m.chat.id, None)
+    create_states.pop(m.chat.id, None)
+    bot.clear_step_handler_by_chat_id(m.chat.id)
     text = "به دستیار هوشمند CRM خوش آمدید! 🤖\n\nبرای جستجو و مدیریت، کانفیگ، یوزرنیم یا UUID را بفرستید."
     bot.send_message(m.chat.id, text, parse_mode="Markdown", reply_markup=get_main_reply_keyboard())
 
@@ -757,7 +813,9 @@ def handle_setsub_ask(call):
 
 def handle_setsub_save(m, sid):
     txt = m.text.strip()
-    if txt == "لغو": return bot.send_message(m.chat.id, "عملیات لغو شد.", reply_markup=get_main_reply_keyboard())
+    if txt in ["لغو", "🔄 استارت مجدد", "/start"]:
+        bot.clear_step_handler_by_chat_id(m.chat.id)
+        return start(m)
     if not txt.startswith("http"): return bot.send_message(m.chat.id, "آدرس نامعتبر است. حتماً باید با http یا https شروع شود.")
     conn = sqlite3.connect(DB_PATH)
     conn.execute("UPDATE servers SET sub_url=? WHERE id=?", (txt, sid))
@@ -784,12 +842,9 @@ def handle_messages(m):
     if not check_admin(m): return
     txt = m.text.strip()
     
-    if txt == "🔙 پایان مدیریت" or txt == "لغو":
-        active_targets.pop(m.chat.id, None)
-        create_states.pop(m.chat.id, None)
+    if txt == "🔄 استارت مجدد" or txt == "لغو" or txt == "/start":
         bot.clear_step_handler_by_chat_id(m.chat.id)
-        bot.reply_to(m, "عملیات لغو شد. 🔙", reply_markup=get_main_reply_keyboard())
-        return
+        return start(m)
 
     if txt == "➕ ساخت کانفیگ جدید":
         conn = get_db(); servers = conn.execute("SELECT * FROM servers WHERE allow_sell=1").fetchall(); conn.close()
@@ -805,17 +860,19 @@ def handle_messages(m):
         if txt == "❌ حذف اکانت":
             wait = bot.send_message(m.chat.id, "⏳ در حال حذف...")
             ok, msg = perform_action(target['sid'], target['uuid'], "delete")
-            bot.delete_message(m.chat.id, wait.message_id)
-            bot.send_message(m.chat.id, msg, reply_markup=get_main_reply_keyboard())
+            try: bot.delete_message(m.chat.id, wait.message_id)
+            except: pass
+            safe_send(m.chat.id, msg, reply_markup=get_main_reply_keyboard())
             active_targets.pop(m.chat.id, None)
         elif txt == "⏯ تغییر وضعیت (فعال/غیرفعال)":
             wait = bot.send_message(m.chat.id, "⏳ در حال تغییر وضعیت...")
             ok, msg = perform_action(target['sid'], target['uuid'], "toggle")
-            bot.delete_message(m.chat.id, wait.message_id)
-            bot.send_message(m.chat.id, msg, parse_mode="Markdown")
+            try: bot.delete_message(m.chat.id, wait.message_id)
+            except: pass
+            safe_send(m.chat.id, msg)
         elif txt == "🔄 تمدید اکانت":
             step_states[m.chat.id] = {'sid': target['sid'], 'uuid': target['uuid']}
-            msg = bot.send_message(m.chat.id, "🔄 **تمدید:**\nتعداد روز را بصورت عدد وارد کنید:\n(0 = نامحدود | لغو)", parse_mode="Markdown", reply_markup=types.ReplyKeyboardRemove())
+            msg = bot.send_message(m.chat.id, "🔄 **تمدید:**\nتعداد روز را بصورت عدد وارد کنید:\n(0 = نامحدود | لغو)", parse_mode="Markdown", reply_markup=get_main_reply_keyboard())
             bot.register_next_step_handler(msg, step_days)
         return
 
@@ -905,7 +962,7 @@ def handle_create_actions(call):
     elif action == "cr_done":
         if not st['selected']: return bot.answer_callback_query(call.id, "حداقل یک پورت را انتخاب کنید!", show_alert=True)
         bot.delete_message(cid, call.message.message_id)
-        msg = bot.send_message(cid, "📝 **نام کاربری (Email) را وارد کنید:**\n(لغو)", reply_markup=types.ReplyKeyboardRemove(), parse_mode="Markdown")
+        msg = bot.send_message(cid, "📝 **نام کاربری (Email) را وارد کنید:**\n(لغو)", reply_markup=get_main_reply_keyboard(), parse_mode="Markdown")
         bot.register_next_step_handler(msg, cr_step_name)
     elif action.startswith('cr_inb_'):
         inb_id = int(action.split('_')[2])
@@ -915,86 +972,83 @@ def handle_create_actions(call):
 
 def cr_step_name(m):
     txt = m.text.strip()
-    if txt == "لغو": return handle_messages(m)
+    if txt in ["لغو", "🔄 استارت مجدد", "/start"]:
+        bot.clear_step_handler_by_chat_id(m.chat.id)
+        return start(m)
     create_states[m.chat.id]['name'] = txt
-    msg = bot.send_message(m.chat.id, "📅 **تعداد روز اعتبار را وارد کنید:**\n(0 = نامحدود)", parse_mode="Markdown")
+    msg = bot.send_message(m.chat.id, "📅 **تعداد روز اعتبار را وارد کنید:**\n(0 = نامحدود)", parse_mode="Markdown", reply_markup=get_main_reply_keyboard())
     bot.register_next_step_handler(msg, cr_step_days)
 
 def cr_step_days(m):
     txt = m.text.strip()
-    if txt == "لغو": return handle_messages(m)
+    if txt in ["لغو", "🔄 استارت مجدد", "/start"]:
+        bot.clear_step_handler_by_chat_id(m.chat.id)
+        return start(m)
     if not txt.isdigit():
-        msg = bot.reply_to(m, "❌ فقط عدد! تعداد روز:"); bot.register_next_step_handler(msg, cr_step_days); return
+        msg = bot.reply_to(m, "❌ فقط عدد! تعداد روز:", reply_markup=get_main_reply_keyboard())
+        bot.register_next_step_handler(msg, cr_step_days)
+        return
     create_states[m.chat.id]['days'] = int(txt)
-    msg = bot.send_message(m.chat.id, "📦 **حجم به گیگابایت را وارد کنید:**\n(0 = نامحدود)", parse_mode="Markdown")
+    msg = bot.send_message(m.chat.id, "📦 **حجم به گیگابایت را وارد کنید:**\n(0 = نامحدود)", parse_mode="Markdown", reply_markup=get_main_reply_keyboard())
     bot.register_next_step_handler(msg, cr_step_gb)
 
 def cr_step_gb(m):
     txt = m.text.strip()
-    if txt == "لغو": return handle_messages(m)
+    if txt in ["لغو", "🔄 استارت مجدد", "/start"]:
+        bot.clear_step_handler_by_chat_id(m.chat.id)
+        return start(m)
     if not txt.isdigit():
-        msg = bot.reply_to(m, "❌ فقط عدد! حجم (GB):"); bot.register_next_step_handler(msg, cr_step_gb); return
+        msg = bot.reply_to(m, "❌ فقط عدد! حجم (GB):", reply_markup=get_main_reply_keyboard())
+        bot.register_next_step_handler(msg, cr_step_gb)
+        return
     st = create_states.get(m.chat.id)
     if not st: return
     
     wait = bot.send_message(m.chat.id, "⏳ در حال ساخت کانفیگ در سرور...")
     ok, response_data, uid = create_config(st['sid'], st['selected'], st['name'], st['days'], int(txt))
-    bot.delete_message(m.chat.id, wait.message_id)
+    try: bot.delete_message(m.chat.id, wait.message_id)
+    except: pass
     
     if ok:
         msg1, msg2, msg3 = response_data
-        try: bot.send_message(m.chat.id, "🚀")
-        except: pass
-        
-        try:
-            if msg1: bot.send_message(m.chat.id, msg1, parse_mode="Markdown", disable_web_page_preview=True)
-        except Exception as e: bot.send_message(m.chat.id, f"⚠️ هشدار در ارسال پیام ۱:\n{e}")
-        
-        try:
-            if msg2: bot.send_message(m.chat.id, msg2, disable_web_page_preview=True)
-        except Exception as e: bot.send_message(m.chat.id, f"⚠️ هشدار در ارسال پیام ۲:\n{e}")
-        
-        try:
-            if msg3: bot.send_message(m.chat.id, msg3, parse_mode="Markdown", disable_web_page_preview=True)
-        except Exception as e: bot.send_message(m.chat.id, f"⚠️ هشدار در ارسال پیام ۳:\n{e}")
-        
+        safe_send(m.chat.id, msg1)
+        safe_send(m.chat.id, msg2)
+        safe_send(m.chat.id, msg3)
         bot.send_message(m.chat.id, "عملیات با موفقیت پایان یافت.", reply_markup=get_main_reply_keyboard())
     else:
-        bot.send_message(m.chat.id, response_data, parse_mode="Markdown", reply_markup=get_main_reply_keyboard())
+        safe_send(m.chat.id, response_data, reply_markup=get_main_reply_keyboard())
         
     create_states.pop(m.chat.id, None)
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith('sel_'))
-def handle_select_server(call):
-    bot.delete_message(call.message.chat.id, call.message.message_id)
-    data = call.data.split('_'); sid, uuid = int(data[1]), data[2]
-    conn = get_db(); cr = conn.cursor(); cr.execute("SELECT * FROM servers WHERE id=?", (sid,))
-    srv = cr.fetchone(); conn.close()
-    if srv:
-        for cl in fetch_clients(dict(srv)):
-            if cl['uuid'] == uuid: show_client_info_and_keyboard(call.message.chat.id, cl); return
-    bot.send_message(call.message.chat.id, "❌ خطا در دریافت اطلاعات.")
-
 def step_days(m):
     txt = m.text.strip()
-    if txt == "لغو" or txt == "🔙 پایان مدیریت": return handle_messages(m)
+    if txt in ["لغو", "🔄 استارت مجدد", "/start"]:
+        bot.clear_step_handler_by_chat_id(m.chat.id)
+        return start(m)
     if not txt.isdigit():
-        msg = bot.reply_to(m, "❌ فقط عدد وارد کنید.\nتعداد روز:"); bot.register_next_step_handler(msg, step_days); return
+        msg = bot.reply_to(m, "❌ فقط عدد وارد کنید.\nتعداد روز:", reply_markup=get_main_reply_keyboard())
+        bot.register_next_step_handler(msg, step_days)
+        return
     step_states[m.chat.id]['days'] = int(txt)
-    msg = bot.send_message(m.chat.id, "📊 **حجم (گیگابایت):**", parse_mode="Markdown")
+    msg = bot.send_message(m.chat.id, "📊 **حجم (گیگابایت):**", parse_mode="Markdown", reply_markup=get_main_reply_keyboard())
     bot.register_next_step_handler(msg, step_gb)
 
 def step_gb(m):
     txt = m.text.strip()
-    if txt == "لغو" or txt == "🔙 پایان مدیریت": return handle_messages(m)
+    if txt in ["لغو", "🔄 استارت مجدد", "/start"]:
+        bot.clear_step_handler_by_chat_id(m.chat.id)
+        return start(m)
     if not txt.isdigit():
-        msg = bot.reply_to(m, "❌ فقط عدد!\nمقدار حجم:"); bot.register_next_step_handler(msg, step_gb); return
+        msg = bot.reply_to(m, "❌ فقط عدد!\nمقدار حجم:", reply_markup=get_main_reply_keyboard())
+        bot.register_next_step_handler(msg, step_gb)
+        return
     st = step_states.get(m.chat.id)
     if not st: return
     wait = bot.send_message(m.chat.id, "⏳ در حال تمدید...")
     ok, msg_resp = perform_action(st['sid'], st['uuid'], "extend", days=st['days'], gb=int(txt))
-    bot.delete_message(m.chat.id, wait.message_id)
-    bot.send_message(m.chat.id, msg_resp, parse_mode="Markdown", reply_markup=get_main_reply_keyboard())
+    try: bot.delete_message(m.chat.id, wait.message_id)
+    except: pass
+    safe_send(m.chat.id, msg_resp, reply_markup=get_main_reply_keyboard())
     step_states.pop(m.chat.id, None)
 
 @bot.callback_query_handler(func=lambda c: c.data == "ign")
@@ -1003,211 +1057,4 @@ def ignore_clicks(call): bot.answer_callback_query(call.id, "این دکمه ن�
 bot.infinity_polling()
 EOF
 
-# --- main.py ---
-cat << 'EOF' > main.py
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
-import sqlite3, uvicorn, os, glob
-
-for f in glob.glob('/tmp/userrenew_*.json'):
-    try: os.remove(f)
-    except: pass
-os.system("pkill -f 'xray run -c /tmp/userrenew_'")
-
-app = FastAPI()
-DB_PATH = 'users.db'
-
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('CREATE TABLE IF NOT EXISTS servers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, host TEXT, user TEXT, password TEXT, xray_config TEXT, allow_sell INTEGER DEFAULT 1)')
-    try: c.execute("ALTER TABLE servers ADD COLUMN allow_sell INTEGER DEFAULT 1")
-    except: pass
-    try: c.execute("ALTER TABLE servers ADD COLUMN panel_type TEXT DEFAULT 'new'")
-    except: pass
-    try: c.execute("ALTER TABLE servers ADD COLUMN sub_url TEXT")
-    except: pass
-    c.execute('CREATE TABLE IF NOT EXISTS admin (username TEXT, password TEXT)')
-    c.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
-    if c.execute('SELECT count(*) FROM admin').fetchone()[0] == 0:
-        c.execute("INSERT INTO admin VALUES ('ADMIN_PLACEHOLDER', 'PASS_PLACEHOLDER')")
-    conn.commit(); conn.close()
-init_db()
-
-class LoginModel(BaseModel): username: str; password: str
-class ServerModel(BaseModel): name: str; host: str; user: str; password: str; xray_config: str; allow_sell: bool; panel_type: str = 'new'
-class SettingsModel(BaseModel): admin_ids: str
-
-@app.post("/api/login")
-def login(data: LoginModel):
-    conn = sqlite3.connect(DB_PATH); c = conn.cursor()
-    c.execute("SELECT * FROM admin WHERE username=? AND password=?", (data.username, data.password))
-    valid = c.fetchone() is not None; conn.close()
-    return {"success": valid}
-
-@app.get("/api/settings")
-def get_settings():
-    conn = sqlite3.connect(DB_PATH); c = conn.cursor()
-    c.execute("SELECT value FROM settings WHERE key='admin_ids'")
-    row = c.fetchone(); conn.close()
-    return {"admin_ids": row[0] if row else ""}
-
-@app.post("/api/settings")
-def save_settings(s: SettingsModel):
-    conn = sqlite3.connect(DB_PATH); c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_ids', ?)", (s.admin_ids,))
-    conn.commit(); conn.close(); return {"success": True}
-
-@app.get("/api/servers")
-def get_servers():
-    conn = sqlite3.connect(DB_PATH); conn.row_factory = sqlite3.Row; c = conn.cursor()
-    servers = [dict(r) for r in c.execute("SELECT * FROM servers ORDER BY id DESC").fetchall()]; conn.close()
-    return servers
-
-@app.post("/api/servers")
-def add_server(s: ServerModel):
-    conn = sqlite3.connect(DB_PATH); c = conn.cursor()
-    c.execute("INSERT INTO servers (name, host, user, password, xray_config, allow_sell, panel_type) VALUES (?, ?, ?, ?, ?, ?, ?)", (s.name, s.host, s.user, s.password, s.xray_config, 1 if s.allow_sell else 0, s.panel_type))
-    conn.commit(); conn.close(); return {"success": True}
-
-@app.put("/api/servers/{server_id}")
-def edit_server(server_id: int, s: ServerModel):
-    conn = sqlite3.connect(DB_PATH); c = conn.cursor()
-    c.execute("UPDATE servers SET name=?, host=?, user=?, password=?, xray_config=?, allow_sell=?, panel_type=? WHERE id=?", (s.name, s.host, s.user, s.password, s.xray_config, 1 if s.allow_sell else 0, s.panel_type, server_id))
-    conn.commit(); conn.close(); return {"success": True}
-
-@app.delete("/api/servers/{server_id}")
-def del_server(server_id: int):
-    conn = sqlite3.connect(DB_PATH); c = conn.cursor()
-    c.execute("DELETE FROM servers WHERE id=?", (server_id,))
-    conn.commit(); conn.close(); return {"success": True}
-
-@app.get("/", response_class=HTMLResponse)
-def serve_panel():
-    with open("panel.html", "r", encoding="utf-8") as f: return f.read()
-
-if __name__ == "__main__": uvicorn.run(app, host="0.0.0.0", port=PORT_PLACEHOLDER)
-EOF
-
-sed -i "s/BOT_TOKEN_PLACEHOLDER/$BOT_TOKEN/g" xray_bot.py
-sed -i "s/PORT_PLACEHOLDER/$PANEL_PORT/g" main.py
-sed -i "s/ADMIN_PLACEHOLDER/$PANEL_USER/g" main.py
-sed -i "s/PASS_PLACEHOLDER/$PANEL_PASS/g" main.py
-
-python3 -m venv venv
-source venv/bin/activate
-pip install -q telebot "requests[socks]" fastapi uvicorn pydantic
-
-cat << 'EOF_MENU' > /usr/bin/userrenew
-#!/bin/bash
-PURPLE="\e[35m"
-GREEN="\e[32m"
-RED="\e[31m"
-CYAN="\e[36m"
-YELLOW="\e[33m"
-RESET="\e[0m"
-
-change_token() {
-    read -p "Enter New Bot Token: " new_token
-    sed -i "s/BOT_TOKEN = \".*\"/BOT_TOKEN = \"$new_token\"/g" /root/UserRenew/xray_bot.py
-    systemctl restart userrenew-bot
-    echo -e "${GREEN}[+] Bot token updated successfully!${RESET}"
-    sleep 2
-}
-
-change_port() {
-    read -p "Enter New Panel Port: " new_port
-    sed -i "s/port=[0-9]*/port=$new_port/g" /root/UserRenew/main.py
-    systemctl restart userrenew-panel
-    echo -e "${GREEN}[+] Panel port updated to $new_port successfully!${RESET}"
-    sleep 2
-}
-
-change_creds() {
-    read -p "Enter New Admin Username: " new_user
-    read -p "Enter New Admin Password: " new_pass
-    safe_user=$(echo "$new_user" | sed "s/'/''/g")
-    safe_pass=$(echo "$new_pass" | sed "s/'/''/g")
-    sqlite3 /root/UserRenew/users.db "UPDATE admin SET username='$safe_user', password='$safe_pass';"
-    echo -e "${GREEN}[+] Admin credentials updated successfully!${RESET}"
-    sleep 2
-}
-
-uninstall_all() {
-    echo -e "${RED}[!] WARNING: This will delete everything (including database).${RESET}"
-    read -p "Are you sure? (y/n): " confirm
-    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-        systemctl stop userrenew-panel userrenew-bot
-        systemctl disable userrenew-panel userrenew-bot
-        rm -f /etc/systemd/system/userrenew-*
-        systemctl daemon-reload
-        rm -rf /root/UserRenew
-        rm -f /usr/bin/userrenew
-        echo -e "${GREEN}[+] UserRenew completely uninstalled.${RESET}"
-        exit 0
-    fi
-}
-
-while true; do
-    clear
-    echo -e "${CYAN}====================================================${RESET}"
-    echo -e "${PURPLE}             UserRenew Management                   ${RESET}"
-    echo -e "${CYAN}====================================================${RESET}"
-    echo -e "1. ${YELLOW}Change Telegram Bot Token${RESET}"
-    echo -e "2. ${YELLOW}Change Panel Web Port${RESET}"
-    echo -e "3. ${YELLOW}Change Panel Username & Password${RESET}"
-    echo -e "4. ${GREEN}Restart Services${RESET}"
-    echo -e "5. ${RED}Uninstall Entire System${RESET}"
-    echo -e "6. Exit"
-    echo -e "${CYAN}====================================================${RESET}"
-    read -p "Select an option [1-6]: " choice
-    case $choice in
-        1) change_token ;;
-        2) change_port ;;
-        3) change_creds ;;
-        4) systemctl restart userrenew-panel userrenew-bot && echo -e "${GREEN}[+] Services Restarted!${RESET}" && sleep 2 ;;
-        5) uninstall_all ;;
-        6) exit 0 ;;
-        *) echo -e "${RED}Invalid option!${RESET}" && sleep 1 ;;
-    esac
-done
-EOF_MENU
-chmod +x /usr/bin/userrenew
-
-cat << 'EOF_SERVICE' > /etc/systemd/system/userrenew-panel.service
-[Unit]
-Description=UserRenew Panel Web
-After=network.target
-[Service]
-WorkingDirectory=/root/UserRenew
-ExecStart=/root/UserRenew/venv/bin/python main.py
-Restart=always
-[Install]
-WantedBy=multi-user.target
-EOF_SERVICE
-
-cat << 'EOF_SERVICE' > /etc/systemd/system/userrenew-bot.service
-[Unit]
-Description=UserRenew Telegram Bot
-After=network.target
-[Service]
-WorkingDirectory=/root/UserRenew
-ExecStart=/root/UserRenew/venv/bin/python xray_bot.py
-Restart=always
-[Install]
-WantedBy=multi-user.target
-EOF_SERVICE
-
-systemctl daemon-reload
-systemctl enable userrenew-panel userrenew-bot > /dev/null 2>&1
-systemctl restart userrenew-panel userrenew-bot
-
-IPV4=$(curl -4 -s icanhazip.com || curl -s -4 ifconfig.me)
-
-echo -e "${GREEN}====================================================${RESET}"
-echo -e "${GREEN}   Installation Completed Successfully!             ${RESET}"
-echo -e "${PURPLE}[+] Panel URL:${RESET} http://$IPV4:$PANEL_PORT"
-echo -e "${PURPLE}[+] Admin Username:${RESET} $PANEL_USER"
-echo -e "${PURPLE}[+] Type ${GREEN}userrenew${PURPLE} in terminal for CLI menu.${RESET}"
-echo -e "${GREEN}====================================================${RESET}"
+systemctl restart userrenew-bot
