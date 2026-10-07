@@ -342,6 +342,7 @@ cat << 'EOF_BOT' > xray_bot.py
 import telebot
 from telebot import types
 import sqlite3, os, requests, json, urllib3, socket, subprocess, time, urllib.parse, uuid, random, string, re, base64
+from concurrent.futures import ThreadPoolExecutor
 urllib3.disable_warnings()
 
 try:
@@ -401,11 +402,11 @@ def get_session(base_url=None):
 
 def panel_login(s, url, username, password, proxies=None):
     try:
-        res_get = s.get(f"{url}/", proxies=proxies, timeout=10)
+        res_get = s.get(f"{url}/", proxies=proxies, timeout=6)
         match = re.search(r'name="csrf-token"\s+content="([^"]+)"', res_get.text, re.IGNORECASE)
         if match: s.headers.update({"X-CSRF-Token": match.group(1)})
         s.headers.update({"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"})
-        res = s.post(f"{url}/login", data={"username": username, "password": password}, proxies=proxies, timeout=10)
+        res = s.post(f"{url}/login", data={"username": username, "password": password}, proxies=proxies, timeout=6)
         s.headers.update({"Content-Type": "application/json"})
         return res
     except: return None
@@ -569,14 +570,29 @@ class XrayTunnel:
             }, f)
             
         self.p = subprocess.Popen(['/usr/local/bin/xray', 'run', '-c', self.cfg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(2.5)
+        
+        # پایش هوشمند پورت (Port Polling) به جای تاخیر ثابت ۲.۵ ثانیه‌ای
+        connected = False
+        for _ in range(30):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(0.1)
+                    if s.connect_ex(('127.0.0.1', self.port)) == 0:
+                        connected = True
+                        break
+            except: pass
+            time.sleep(0.08)
+            
+        if not connected:
+            time.sleep(0.5)
+
         return f"socks5://127.0.0.1:{self.port}"
 
     def __exit__(self, *args):
         if self.p:
             try:
                 self.p.terminate()
-                self.p.wait(timeout=2)
+                self.p.wait(timeout=1.5)
             except Exception:
                 try: self.p.kill()
                 except Exception: pass
@@ -616,7 +632,7 @@ def fetch_clients(server):
             except: is_logged = res_login.status_code == 200
             if not is_logged: return []
             
-            res = s.get(f"{url}/panel/api/inbounds/list", proxies=proxies, timeout=10).json()
+            res = s.get(f"{url}/panel/api/inbounds/list", proxies=proxies, timeout=8).json()
             clients_info = []
             for ib in res.get("obj", []):
                 inbound_id = ib['id']
@@ -653,7 +669,7 @@ def perform_action(server_id, uuid_str, action, **kwargs):
             if not res_login or res_login.status_code != 200: 
                 return False, f"خطا در ورود به پنل (کد {res_login.status_code if res_login else 'نامشخص'})"
             
-            inbounds = s.get(f"{url}/panel/api/inbounds/list", proxies=proxies, timeout=10).json().get("obj", [])
+            inbounds = s.get(f"{url}/panel/api/inbounds/list", proxies=proxies, timeout=8).json().get("obj", [])
             
             targets = []
             for ib in inbounds:
@@ -675,7 +691,7 @@ def perform_action(server_id, uuid_str, action, **kwargs):
                 
                 if action == "delete":
                     if panel_type == 'new':
-                        res = s.post(f"{url}/panel/api/inbounds/{target_inb}/delClient/{uuid_str}", proxies=proxies, timeout=10)
+                        res = s.post(f"{url}/panel/api/inbounds/{target_inb}/delClient/{uuid_str}", proxies=proxies, timeout=8)
                         success = False
                         try: success = res.json().get('success')
                         except: success = (res.status_code == 200)
@@ -698,7 +714,7 @@ def perform_action(server_id, uuid_str, action, **kwargs):
                             
                     if panel_type == 'new':
                         payload = {"id": target_inb, "settings": json.dumps({"clients": [target_cl]})}
-                        res = s.post(f"{url}/panel/api/inbounds/updateClient/{uuid_str}", json=payload, proxies=proxies, timeout=10)
+                        res = s.post(f"{url}/panel/api/inbounds/updateClient/{uuid_str}", json=payload, proxies=proxies, timeout=8)
                         success = False
                         try: success = res.json().get('success')
                         except: success = (res.status_code == 200)
@@ -727,7 +743,7 @@ def perform_action(server_id, uuid_str, action, **kwargs):
                             
                     if panel_type == 'new':
                         payload = {"id": target_inb, "settings": json.dumps({"clients": [target_cl]})}
-                        res = s.post(f"{url}/panel/api/inbounds/updateClient/{uuid_str}", json=payload, proxies=proxies, timeout=10)
+                        res = s.post(f"{url}/panel/api/inbounds/updateClient/{uuid_str}", json=payload, proxies=proxies, timeout=8)
                         success = False
                         try: success = res.json().get('success')
                         except: success = (res.status_code == 200)
@@ -735,11 +751,11 @@ def perform_action(server_id, uuid_str, action, **kwargs):
                         if not success:
                             full_inbound_update(s, url, target_inb, ib, clients_list, panel_type, proxies)
                             
-                        try: s.post(f"{url}/panel/api/inbounds/{target_inb}/resetClientTraffic/{target_cl['email']}", proxies=proxies, timeout=10)
+                        try: s.post(f"{url}/panel/api/inbounds/{target_inb}/resetClientTraffic/{target_cl['email']}", proxies=proxies, timeout=8)
                         except: pass
                     else:
                         full_inbound_update(s, url, target_inb, ib, clients_list, panel_type, proxies)
-                        try: s.post(f"{url}/panel/api/inbounds/{target_inb}/resetClientTraffic/{target_cl['email']}", proxies=proxies, timeout=10)
+                        try: s.post(f"{url}/panel/api/inbounds/{target_inb}/resetClientTraffic/{target_cl['email']}", proxies=proxies, timeout=8)
                         except: pass
                         
                     msg_out = "✅ **اکانت با موفقیت تمدید و حجم آن ریست شد.**"
@@ -830,7 +846,7 @@ def create_config(server_id, inb_ids_list, username, days, gb):
             res_login = panel_login(s, url, srv['user'], srv['password'], proxies)
             if not res_login or res_login.status_code != 200: return False, "خطا در ورود به پنل", None
             
-            inbounds_data = s.get(f"{url}/panel/api/inbounds/list", proxies=proxies, timeout=10).json().get("obj", [])
+            inbounds_data = s.get(f"{url}/panel/api/inbounds/list", proxies=proxies, timeout=8).json().get("obj", [])
             
             for ib in inbounds_data:
                 settings = safe_loads(ib.get('settings', '{}'))
@@ -862,7 +878,7 @@ def create_config(server_id, inb_ids_list, username, days, gb):
                 
                 if panel_type == 'new':
                     payload = {"id": inb_id, "settings": json.dumps({"clients": [client_dict]})}
-                    res = s.post(f"{url}/panel/api/inbounds/addClient", json=payload, proxies=proxies, timeout=10)
+                    res = s.post(f"{url}/panel/api/inbounds/addClient", json=payload, proxies=proxies, timeout=8)
                     try: success_added = res.json().get('success', False)
                     except: success_added = (res.status_code == 200)
                         
@@ -886,7 +902,7 @@ def create_config(server_id, inb_ids_list, username, days, gb):
                     final_sub_url = f"{sub_base_url}{subid}"
                     for _ in range(4):
                         try:
-                            r_sub = requests.get(final_sub_url, verify=False, proxies=proxies, timeout=5)
+                            r_sub = requests.get(final_sub_url, verify=False, proxies=proxies, timeout=4)
                             if r_sub.status_code == 200:
                                 text = r_sub.text.strip()
                                 try:
@@ -898,7 +914,7 @@ def create_config(server_id, inb_ids_list, username, days, gb):
                                     if "://" in line.strip(): raw_configs.append(f"`{line.strip()}`")
                                 if raw_configs: break
                         except: pass
-                        time.sleep(0.5)
+                        time.sleep(0.3)
 
                 if not raw_configs:
                     for inb_id in inb_ids_list:
@@ -1050,11 +1066,18 @@ def handle_messages(m):
     conn = get_db(); servers = conn.execute("SELECT * FROM servers").fetchall(); conn.close()
     
     unique_found = {}
-    for srv in servers:
-        for cl in fetch_clients(dict(srv)):
-            if query == cl['uuid'] or query.lower() == cl['email'].lower():
-                key = f"{cl['server_id']}_{cl['uuid']}"
-                if key not in unique_found: unique_found[key] = cl
+    server_list = [dict(s) for s in servers]
+    
+    # جستجوی موازی و هم‌زمان در سرورها با ThreadPoolExecutor برای حداکثر سرعت
+    if server_list:
+        max_th = min(len(server_list), 6)
+        with ThreadPoolExecutor(max_workers=max_th) as executor:
+            results = executor.map(fetch_clients, server_list)
+            for clients_group in results:
+                for cl in clients_group:
+                    if query == cl['uuid'] or query.lower() == cl['email'].lower():
+                        key = f"{cl['server_id']}_{cl['uuid']}"
+                        if key not in unique_found: unique_found[key] = cl
     
     found = list(unique_found.values())
     try: bot.delete_message(m.chat.id, msg_wait.message_id)
@@ -1100,7 +1123,7 @@ def handle_create_srv(call):
         try:
             res_login = panel_login(s, url, srv['user'], srv['password'], proxies)
             if res_login and res_login.status_code == 200:
-                inb_res = s.get(f"{url}/panel/api/inbounds/list", proxies=proxies, timeout=10)
+                inb_res = s.get(f"{url}/panel/api/inbounds/list", proxies=proxies, timeout=8)
                 if inb_res.status_code == 200: inbounds = inb_res.json().get("obj", [])
                 else: err_debug = f"ارور {inb_res.status_code}: عدم اجازه دسترسی به API"
             else: err_debug = f"ارور لاگین. وضعیت: {res_login.status_code if res_login else 'قطع ارتباط'}"
@@ -1223,7 +1246,8 @@ def step_gb(m):
 @bot.callback_query_handler(func=lambda c: c.data == "ign")
 def ignore_clicks(call): bot.answer_callback_query(call.id, "این دکمه نمایشی است 📊")
 
-bot.infinity_polling()
+# پولینگ سریع با مدیریت تایم‌اوت‌های شبکه تلگرام
+bot.infinity_polling(timeout=10, long_polling_timeout=5, allowed_updates=['message', 'callback_query'])
 EOF_BOT
 
 # ==========================================
