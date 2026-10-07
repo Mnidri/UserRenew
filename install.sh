@@ -366,8 +366,17 @@ def safe_loads(val):
     try: return json.loads(val) if val else {}
     except: return {}
 
+def get_main_reply_keyboard():
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2, is_persistent=True)
+    markup.add("➕ ساخت کانفیگ جدید")
+    markup.add("🔄 تمدید اکانت", "⏯ تغییر وضعیت (فعال/غیرفعال)")
+    markup.add("❌ حذف اکانت", "🔄 استارت مجدد")
+    return markup
+
 def safe_send(chat_id, text, reply_markup=None):
     if not text: return
+    if reply_markup is None:
+        reply_markup = get_main_reply_keyboard()
     try:
         bot.send_message(chat_id, text, parse_mode="Markdown", disable_web_page_preview=True, reply_markup=reply_markup)
     except:
@@ -936,17 +945,10 @@ def create_config(server_id, inb_ids_list, username, days, gb):
             return False, "خطا در ساخت اکانت توسط پنل", None
         except Exception as e: return False, f"خطای ارتباط: {str(e)}", None
 
-def get_main_reply_keyboard():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    markup.add("➕ ساخت کانفیگ جدید")
-    markup.add("🔄 تمدید اکانت", "⏯ تغییر وضعیت (فعال/غیرفعال)")
-    markup.add("❌ حذف اکانت", "🔄 استارت مجدد")
-    return markup
-
 def check_admin(m):
     admin_ids = get_admin_ids()
     if not admin_ids or m.chat.id not in admin_ids:
-        bot.reply_to(m, f"🔒 **دسترسی غیرمجاز!**\n\nآیدی عددی تلگرام شما:\n`{m.chat.id}`", parse_mode="Markdown")
+        safe_send(m.chat.id, f"🔒 **دسترسی غیرمجاز!**\n\nآیدی عددی تلگرام شما:\n`{m.chat.id}`", reply_markup=types.ReplyKeyboardRemove())
         return False
     return True
 
@@ -958,22 +960,22 @@ def start(m):
     create_states.pop(m.chat.id, None)
     bot.clear_step_handler_by_chat_id(m.chat.id)
     text = "به دستیار هوشمند CRM خوش آمدید! 🤖\n\nبرای جستجو و مدیریت، کانفیگ، یوزرنیم یا UUID را بفرستید."
-    bot.send_message(m.chat.id, text, parse_mode="Markdown", reply_markup=get_main_reply_keyboard())
+    safe_send(m.chat.id, text, reply_markup=get_main_reply_keyboard())
 
 @bot.message_handler(commands=['set_sub'])
 def set_sub_command(m):
     if not check_admin(m): return
     conn = get_db(); servers = conn.execute("SELECT * FROM servers").fetchall(); conn.close()
-    if not servers: return bot.reply_to(m, "❌ سروری یافت نشد.")
+    if not servers: return safe_send(m.chat.id, "❌ سروری یافت نشد.", reply_markup=get_main_reply_keyboard())
     markup = types.InlineKeyboardMarkup(row_width=1)
     for s in servers: markup.add(types.InlineKeyboardButton(f"🌐 {s['name']}", callback_data=f"setsub_{s['id']}"))
-    bot.send_message(m.chat.id, "برای اینکه ربات کانفیگ‌ها رو دقیقاً مثل پنل تولید کنه، سرور مورد نظر رو انتخاب کنید:", reply_markup=markup)
+    safe_send(m.chat.id, "برای اینکه ربات کانفیگ‌ها رو دقیقاً مثل پنل تولید کنه، سرور مورد نظر رو انتخاب کنید:", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith('setsub_'))
 def handle_setsub_ask(call):
     sid = int(call.data.split('_')[1])
     bot.delete_message(call.message.chat.id, call.message.message_id)
-    msg = bot.send_message(call.message.chat.id, "🔗 **آدرس پایه سابسکریپشن این سرور رو وارد کنید:**\n\nمثال: `https://172.235.163.80:2096/sub/`\n\nبرای انصراف بنویسید: لغو", parse_mode="Markdown")
+    msg = bot.send_message(call.message.chat.id, "🔗 **آدرس پایه سابسکریپشن این سرور رو وارد کنید:**\n\nمثال: `https://172.235.163.80:2096/sub/`\n\nبرای انصراف بنویسید: لغو", parse_mode="Markdown", reply_markup=get_main_reply_keyboard())
     bot.register_next_step_handler(msg, lambda m: handle_setsub_save(m, sid))
 
 def handle_setsub_save(m, sid):
@@ -981,11 +983,11 @@ def handle_setsub_save(m, sid):
     if txt in ["لغو", "🔄 استارت مجدد", "/start"]:
         bot.clear_step_handler_by_chat_id(m.chat.id)
         return start(m)
-    if not txt.startswith("http"): return bot.send_message(m.chat.id, "آدرس نامعتبر است. حتماً باید با http یا https شروع شود.")
+    if not txt.startswith("http"): return safe_send(m.chat.id, "آدرس نامعتبر است. حتماً باید با http یا https شروع شود.", reply_markup=get_main_reply_keyboard())
     conn = sqlite3.connect(DB_PATH)
     conn.execute("UPDATE servers SET sub_url=? WHERE id=?", (txt, sid))
     conn.commit(); conn.close()
-    bot.reply_to(m, "✅ **لینک ساب ثبت شد!**\nربات از این به بعد خروجی ۱۰۰٪ دقیق را از این مسیر استخراج می‌کند.", parse_mode="Markdown", reply_markup=get_main_reply_keyboard())
+    safe_send(m.chat.id, "✅ **لینک ساب ثبت شد!**\nربات از این به بعد خروجی ۱۰۰٪ دقیق را از این مسیر استخراج می‌کند.", reply_markup=get_main_reply_keyboard())
 
 def get_inb_keyboard(chat_id):
     st = create_states.get(chat_id)
@@ -1013,28 +1015,28 @@ def handle_messages(m):
 
     if txt == "➕ ساخت کانفیگ جدید":
         conn = get_db(); servers = conn.execute("SELECT * FROM servers WHERE allow_sell=1").fetchall(); conn.close()
-        if not servers: return bot.reply_to(m, "❌ هیچ سروری برای فروش فعال نیست!")
+        if not servers: return safe_send(m.chat.id, "❌ هیچ سروری برای فروش فعال نیست!", reply_markup=get_main_reply_keyboard())
         markup = types.InlineKeyboardMarkup(row_width=1)
         for s in servers: markup.add(types.InlineKeyboardButton(f"🌐 {s['name']}", callback_data=f"cr_srv_{s['id']}"))
-        bot.send_message(m.chat.id, "سرور مورد نظر را انتخاب کنید:", reply_markup=markup)
+        safe_send(m.chat.id, "سرور مورد نظر را انتخاب کنید:", reply_markup=markup)
         return
 
     if txt in ["🔄 تمدید اکانت", "⏯ تغییر وضعیت (فعال/غیرفعال)", "❌ حذف اکانت"]:
         target = active_targets.get(m.chat.id)
-        if not target: return bot.reply_to(m, "⚠️ هیچ اکانتی انتخاب نشده است! ابتدا جستجو کنید.")
+        if not target: return safe_send(m.chat.id, "⚠️ هیچ اکانتی انتخاب نشده است! ابتدا جستجو کنید.", reply_markup=get_main_reply_keyboard())
         if txt == "❌ حذف اکانت":
-            wait = bot.send_message(m.chat.id, "⏳ در حال حذف...")
+            wait = bot.send_message(m.chat.id, "⏳ در حال حذف...", reply_markup=get_main_reply_keyboard())
             ok, msg = perform_action(target['sid'], target['uuid'], "delete")
             try: bot.delete_message(m.chat.id, wait.message_id)
             except: pass
             safe_send(m.chat.id, msg, reply_markup=get_main_reply_keyboard())
             active_targets.pop(m.chat.id, None)
         elif txt == "⏯ تغییر وضعیت (فعال/غیرفعال)":
-            wait = bot.send_message(m.chat.id, "⏳ در حال تغییر وضعیت...")
+            wait = bot.send_message(m.chat.id, "⏳ در حال تغییر وضعیت...", reply_markup=get_main_reply_keyboard())
             ok, msg = perform_action(target['sid'], target['uuid'], "toggle")
             try: bot.delete_message(m.chat.id, wait.message_id)
             except: pass
-            safe_send(m.chat.id, msg)
+            safe_send(m.chat.id, msg, reply_markup=get_main_reply_keyboard())
         elif txt == "🔄 تمدید اکانت":
             step_states[m.chat.id] = {'sid': target['sid'], 'uuid': target['uuid']}
             msg = bot.send_message(m.chat.id, "🔄 **تمدید:**\nتعداد روز را بصورت عدد وارد کنید:\n(0 = نامحدود | لغو)", parse_mode="Markdown", reply_markup=get_main_reply_keyboard())
@@ -1055,12 +1057,13 @@ def handle_messages(m):
                 if key not in unique_found: unique_found[key] = cl
     
     found = list(unique_found.values())
-    bot.delete_message(m.chat.id, msg_wait.message_id)
-    if not found: return bot.send_message(m.chat.id, "❌ اکانتی یافت نشد!")
+    try: bot.delete_message(m.chat.id, msg_wait.message_id)
+    except: pass
+    if not found: return safe_send(m.chat.id, "❌ اکانتی یافت نشد!", reply_markup=get_main_reply_keyboard())
     if len(found) > 1:
         markup = types.InlineKeyboardMarkup(row_width=1)
         for cl in found: markup.add(types.InlineKeyboardButton(f"سـرور: {cl['server_name']} | یوزر: {cl['email']}", callback_data=f"sel_{cl['server_id']}_{cl['uuid']}"))
-        bot.send_message(m.chat.id, "⚠️ **تکرار در چند سرور!** انتخاب کنید:", reply_markup=markup, parse_mode="Markdown")
+        safe_send(m.chat.id, "⚠️ **تکرار در چند سرور!** انتخاب کنید:", reply_markup=markup)
     else: show_client_info_and_keyboard(m.chat.id, found[0])
 
 def show_client_info_and_keyboard(chat_id, cl):
@@ -1074,18 +1077,18 @@ def show_client_info_and_keyboard(chat_id, cl):
     markup.add(types.InlineKeyboardButton(f"👤 {cl['email']}", callback_data="ign"), types.InlineKeyboardButton(f"🖥 {cl['server_name']}", callback_data="ign"))
     markup.add(types.InlineKeyboardButton(f"📦 {'♾' if total==0 else f'{total:.1f} GB'}", callback_data="ign"), types.InlineKeyboardButton(f"📉 مصرف: {used:.2f} GB", callback_data="ign"))
     markup.add(types.InlineKeyboardButton(f"⏳ {exp_str}", callback_data="ign"), types.InlineKeyboardButton(f"وضعیت: {status}", callback_data="ign"))
-    bot.send_message(chat_id, "🔍 **اکانت پیدا شد!**", reply_markup=get_main_reply_keyboard(), parse_mode="Markdown")
-    bot.send_message(chat_id, "📊 **جزئیات:**", reply_markup=markup, parse_mode="Markdown")
+    safe_send(chat_id, "🔍 **اکانت پیدا شد!**", reply_markup=get_main_reply_keyboard())
+    safe_send(chat_id, "📊 **جزئیات:**", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith('cr_srv_'))
 def handle_create_srv(call):
     bot.delete_message(call.message.chat.id, call.message.message_id)
     sid = int(call.data.split('_')[2])
     create_states[call.message.chat.id] = {'sid': sid, 'selected': []}
-    wait = bot.send_message(call.message.chat.id, "⏳ در حال دریافت پورت‌های سرور...")
+    wait = bot.send_message(call.message.chat.id, "⏳ در حال دریافت پورت‌های سرور...", reply_markup=get_main_reply_keyboard())
     
     conn = get_db(); srv = conn.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone(); conn.close()
-    if not srv: return bot.send_message(call.message.chat.id, "❌ سرور یافت نشد.")
+    if not srv: return safe_send(call.message.chat.id, "❌ سرور یافت نشد.", reply_markup=get_main_reply_keyboard())
     srv = dict(srv)
     url = srv['host'].rstrip('/')
     if not url.startswith("http"): url = "https://" + url
@@ -1103,10 +1106,11 @@ def handle_create_srv(call):
             else: err_debug = f"ارور لاگین. وضعیت: {res_login.status_code if res_login else 'قطع ارتباط'}"
         except Exception as e: err_debug = f"ارور شبکه: {str(e)}"
     
-    bot.delete_message(call.message.chat.id, wait.message_id)
-    if not inbounds: return bot.send_message(call.message.chat.id, f"❌ **خطا در ارتباط با پنل!**\n\n📌 **دیباگ لاگ:**\n`{err_debug}`", parse_mode="Markdown", reply_markup=get_main_reply_keyboard())
+    try: bot.delete_message(call.message.chat.id, wait.message_id)
+    except: pass
+    if not inbounds: return safe_send(call.message.chat.id, f"❌ **خطا در ارتباط با پنل!**\n\n📌 **دیباگ لاگ:**\n`{err_debug}`", reply_markup=get_main_reply_keyboard())
     create_states[call.message.chat.id]['inbounds'] = inbounds
-    bot.send_message(call.message.chat.id, "🔘 **لطفاً پورت(های) مورد نظر را انتخاب کنید:**", reply_markup=get_inb_keyboard(call.message.chat.id), parse_mode="Markdown")
+    safe_send(call.message.chat.id, "🔘 **لطفاً پورت(های) مورد نظر را انتخاب کنید:**", reply_markup=get_inb_keyboard(call.message.chat.id))
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith('cr_'))
 def handle_create_actions(call):
@@ -1118,7 +1122,7 @@ def handle_create_actions(call):
     if action == "cr_cancel":
         bot.delete_message(cid, call.message.message_id)
         create_states.pop(cid, None)
-        bot.send_message(cid, "عملیات لغو شد.", reply_markup=get_main_reply_keyboard())
+        safe_send(cid, "عملیات لغو شد.", reply_markup=get_main_reply_keyboard())
     elif action == "cr_all":
         all_ids = [ib['id'] for ib in st.get('inbounds', [])]
         if set(st['selected']) == set(all_ids): st['selected'] = []
@@ -1169,7 +1173,7 @@ def cr_step_gb(m):
     st = create_states.get(m.chat.id)
     if not st: return
     
-    wait = bot.send_message(m.chat.id, "⏳ در حال ساخت کانفیگ در سرور...")
+    wait = bot.send_message(m.chat.id, "⏳ در حال ساخت کانفیگ در سرور...", reply_markup=get_main_reply_keyboard())
     ok, response_data, uid = create_config(st['sid'], st['selected'], st['name'], st['days'], int(txt))
     try: bot.delete_message(m.chat.id, wait.message_id)
     except: pass
@@ -1177,9 +1181,9 @@ def cr_step_gb(m):
     if ok:
         msg1, msg2, msg3 = response_data
         safe_send(m.chat.id, msg1)
-        safe_send(m.chat.id, msg2)
-        safe_send(m.chat.id, msg3)
-        bot.send_message(m.chat.id, "عملیات با موفقیت پایان یافت.", reply_markup=get_main_reply_keyboard())
+        if msg2: safe_send(m.chat.id, msg2)
+        if msg3: safe_send(m.chat.id, msg3)
+        safe_send(m.chat.id, "عملیات با موفقیت پایان یافت.", reply_markup=get_main_reply_keyboard())
     else:
         safe_send(m.chat.id, response_data, reply_markup=get_main_reply_keyboard())
         
@@ -1209,7 +1213,7 @@ def step_gb(m):
         return
     st = step_states.get(m.chat.id)
     if not st: return
-    wait = bot.send_message(m.chat.id, "⏳ در حال تمدید...")
+    wait = bot.send_message(m.chat.id, "⏳ در حال تمدید...", reply_markup=get_main_reply_keyboard())
     ok, msg_resp = perform_action(st['sid'], st['uuid'], "extend", days=st['days'], gb=int(txt))
     try: bot.delete_message(m.chat.id, wait.message_id)
     except: pass
@@ -1322,7 +1326,7 @@ def serve_panel():
 if __name__ == "__main__": uvicorn.run(app, host="0.0.0.0", port=PORT_PLACEHOLDER)
 EOF_MAIN
 
-# Replace Placeholders safely using Python to avoid character conflicts
+# Replace Placeholders safely using Python environment variables
 export B_TOK="$BOT_TOKEN"
 export P_PRT="$PANEL_PORT"
 export P_USR="$PANEL_USER"
