@@ -103,6 +103,7 @@ cat << 'EOF_HTML' > panel.html
         <div class="flex justify-between items-center glass-panel !py-4 !px-6">
             <div class="text-2xl font-black text-[#c084fc] flex items-center"><i class="fas fa-bolt ml-3"></i> UserRenew</div>
             <div class="flex gap-3">
+                <button onclick="openLogsModal()" title="لاگ‌های ارتباط تونل" class="w-12 h-12 rounded-full bg-[#27272a] hover:bg-[#3f3f46] text-purple-400 transition-colors flex items-center justify-center"><i class="fas fa-terminal text-xl"></i></button>
                 <button onclick="openSettingsModal()" class="w-12 h-12 rounded-full bg-[#27272a] hover:bg-[#3f3f46] text-white transition-colors flex items-center justify-center"><i class="fas fa-users-cog text-xl"></i></button>
                 <button onclick="logout()" class="w-12 h-12 rounded-full bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center"><i class="fas fa-power-off text-xl"></i></button>
             </div>
@@ -114,6 +115,18 @@ cat << 'EOF_HTML' > panel.html
                 <button onclick="openServerModal()" class="w-full sm:w-auto bg-[#c084fc]/20 text-[#c084fc] hover:bg-[#c084fc] hover:text-black transition-all px-6 py-3 rounded-xl text-md font-bold border border-[#c084fc]/30 flex items-center justify-center"><i class="fas fa-plus ml-2"></i> افزودن سرور</button>
             </div>
             <div id="servers-list" class="space-y-4 max-h-[60vh] overflow-y-auto pr-2"></div>
+        </div>
+    </div>
+
+    <!-- Logs Modal -->
+    <div id="logs-modal" class="fixed inset-0 bg-black/95 hidden z-[100] flex items-center justify-center p-4 backdrop-blur-sm">
+        <div class="w-full max-w-2xl glass-panel relative flex flex-col max-h-[85vh]">
+            <button onclick="closeLogsModal()" class="absolute top-6 left-6 text-gray-400 hover:text-white"><i class="fas fa-times text-xl"></i></button>
+            <h3 class="text-xl font-black mb-4 text-[#c084fc] flex items-center"><i class="fas fa-terminal ml-3"></i> لاگ زنده ارتباط ربات و تونل</h3>
+            <div class="flex gap-3 mb-3">
+                <button onclick="refreshLogs()" class="bg-[#27272a] hover:bg-[#3f3f46] text-xs px-3 py-1.5 rounded-lg border border-gray-700"><i class="fas fa-sync-alt ml-1"></i> بازخوانی</button>
+            </div>
+            <pre id="log-console" class="flex-1 bg-black/80 border border-gray-800 rounded-xl p-4 text-xs font-mono text-green-400 overflow-y-auto whitespace-pre-wrap leading-5" dir="ltr">در حال دریافت لاگ‌ها...</pre>
         </div>
     </div>
 
@@ -163,8 +176,8 @@ cat << 'EOF_HTML' > panel.html
                     </select>
                 </div>
                 <div>
-                    <label class="text-sm font-bold text-gray-400 ml-2">مسیر امن Vless (جهت دور زدن فیلترینگ - اختیاری)</label>
-                    <textarea id="srv-xray" rows="2" placeholder="vless://..." dir="ltr" class="text-sm font-mono !mt-2"></textarea>
+                    <label class="text-sm font-bold text-gray-400 ml-2">کانفیگ تونل Xray (VLESS یا VMess جهت دور زدن - اختیاری)</label>
+                    <textarea id="srv-xray" rows="2" placeholder="vless://... یا vmess://..." dir="ltr" class="text-sm font-mono !mt-2"></textarea>
                 </div>
                 <label class="checkbox-container text-gray-300 font-bold text-sm">
                     <input type="checkbox" id="srv-allow-sell" checked>
@@ -234,6 +247,23 @@ cat << 'EOF_HTML' > panel.html
                     </div>
                 </div>
             `).join('');
+        }
+
+        async function openLogsModal() {
+            document.getElementById('logs-modal').classList.remove('hidden');
+            await refreshLogs();
+        }
+        function closeLogsModal() { document.getElementById('logs-modal').classList.add('hidden'); }
+        async function refreshLogs() {
+            const consoleBox = document.getElementById('log-console');
+            consoleBox.textContent = 'در حال بارگذاری لاگ‌ها...';
+            try {
+                const res = await api('/logs');
+                consoleBox.textContent = res.logs || 'هیچ لاگی ثبت نشده است.';
+                consoleBox.scrollTop = consoleBox.scrollHeight;
+            } catch (e) {
+                consoleBox.textContent = 'خطا در ارتباط و دریافت لاگ‌ها.';
+            }
         }
 
         async function openSettingsModal() {
@@ -392,35 +422,158 @@ def get_free_port():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(('', 0)); return s.getsockname()[1]
 
-def build_xray_outbound(vless_link):
-    vless_link = "vless://" + vless_link.split("://")[-1]
-    parsed = urllib.parse.urlparse(vless_link)
-    qs = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
-    def get_qs(key, default=""): return qs.get(key, [""])[0] or default
-    outbound = {
-        "protocol": "vless",
-        "settings": {"vnext": [{"address": parsed.hostname, "port": int(parsed.port), "users": [{"id": parsed.username, "encryption": "none"}]}]},
-        "streamSettings": {"network": get_qs("type", "tcp"), "security": get_qs("security", "none")}
-    }
-    if outbound["streamSettings"]["security"] == "tls": outbound["streamSettings"]["tlsSettings"] = {"serverName": get_qs("sni", parsed.hostname), "fingerprint": get_qs("fp", "")}
-    elif outbound["streamSettings"]["security"] == "reality": outbound["streamSettings"]["realitySettings"] = {"serverName": get_qs("sni", parsed.hostname), "fingerprint": get_qs("fp", ""), "publicKey": get_qs("pbk", ""), "shortId": get_qs("sid", "")}
-    if outbound["streamSettings"]["network"] == "ws": outbound["streamSettings"]["wsSettings"] = {"path": get_qs("path", ""), "headers": {"Host": get_qs("host", "")}}
-    return outbound
+def build_xray_outbound(link):
+    if not link:
+        return None
+    link = link.strip()
+    proto = link.split("://")[0].lower()
+    
+    # 1. پشتیبانی کامل از VMess
+    if proto == "vmess":
+        try:
+            b64_data = link.split("://")[1]
+            pad = '=' * (-len(b64_data) % 4)
+            v_data = json.loads(base64.b64decode(b64_data + pad).decode('utf-8'))
+            
+            outbound = {
+                "protocol": "vmess",
+                "settings": {
+                    "vnext": [{
+                        "address": v_data.get("add"),
+                        "port": int(v_data.get("port", 443)),
+                        "users": [{
+                            "id": v_data.get("id"),
+                            "alterId": int(v_data.get("aid", 0)),
+                            "security": "auto"
+                        }]
+                    }]
+                },
+                "streamSettings": {
+                    "network": v_data.get("net", "tcp"),
+                    "security": "tls" if v_data.get("tls") in ["tls", "1"] else "none"
+                }
+            }
+            if v_data.get("net") == "ws":
+                outbound["streamSettings"]["wsSettings"] = {
+                    "path": v_data.get("path", "/"),
+                    "headers": {"Host": v_data.get("host", "")}
+                }
+            elif v_data.get("net") == "grpc":
+                outbound["streamSettings"]["grpcSettings"] = {
+                    "serviceName": v_data.get("path", "")
+                }
+            return outbound
+        except Exception:
+            return None
+
+    # 2. پشتیبانی کامل از VLESS (همراه با Reality، TLS و Flow)
+    elif proto == "vless":
+        try:
+            link = "vless://" + link.split("://")[-1]
+            parsed = urllib.parse.urlparse(link)
+            qs = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+            def get_qs(key, default=""): return qs.get(key, [""])[0] or default
+
+            flow_val = get_qs("flow", "")
+            sec_val = get_qs("security", "none")
+            net_val = get_qs("type", "tcp")
+            enc_val = get_qs("encryption", "none")
+
+            user_obj = {
+                "id": parsed.username,
+                "encryption": enc_val
+            }
+            if flow_val:
+                user_obj["flow"] = flow_val
+
+            outbound = {
+                "protocol": "vless",
+                "settings": {
+                    "vnext": [{
+                        "address": parsed.hostname,
+                        "port": int(parsed.port),
+                        "users": [user_obj]
+                    }]
+                },
+                "streamSettings": {
+                    "network": net_val,
+                    "security": sec_val
+                }
+            }
+
+            if sec_val == "tls":
+                outbound["streamSettings"]["tlsSettings"] = {
+                    "serverName": get_qs("sni", parsed.hostname),
+                    "fingerprint": get_qs("fp", "chrome")
+                }
+            elif sec_val == "reality":
+                outbound["streamSettings"]["realitySettings"] = {
+                    "serverName": get_qs("sni", parsed.hostname),
+                    "fingerprint": get_qs("fp", "chrome"),
+                    "publicKey": get_qs("pbk", ""),
+                    "shortId": get_qs("sid", ""),
+                    "spiderX": get_qs("spx", "")
+                }
+
+            if net_val == "ws":
+                outbound["streamSettings"]["wsSettings"] = {
+                    "path": get_qs("path", "/"),
+                    "headers": {"Host": get_qs("host", "")}
+                }
+            elif net_val == "grpc":
+                outbound["streamSettings"]["grpcSettings"] = {
+                    "serviceName": get_qs("serviceName", "")
+                }
+
+            return outbound
+        except Exception:
+            return None
+
+    return None
 
 class XrayTunnel:
-    def __init__(self, link): self.link = link; self.p = None; self.port = None; self.cfg = None
+    def __init__(self, link):
+        self.link = link
+        self.p = None
+        self.port = None
+        self.cfg = None
+
     def __enter__(self):
-        if not self.link or not self.link.startswith("vless://"): return None
+        if not self.link or not (self.link.startswith("vless://") or self.link.startswith("vmess://")):
+            return None
         out = build_xray_outbound(self.link)
-        if not out: return None
+        if not out:
+            return None
         self.port = get_free_port()
         self.cfg = f'/tmp/userrenew_{self.port}.json'
-        with open(self.cfg, 'w') as f: json.dump({"inbounds": [{"port": self.port, "listen": "127.0.0.1", "protocol": "socks"}], "outbounds": [out]}, f)
+        
+        with open(self.cfg, 'w') as f:
+            json.dump({
+                "log": {"loglevel": "none"},
+                "inbounds": [{
+                    "port": self.port,
+                    "listen": "127.0.0.1",
+                    "protocol": "socks",
+                    "settings": {"udp": True, "auth": "noauth"}
+                }],
+                "outbounds": [out]
+            }, f)
+            
         self.p = subprocess.Popen(['/usr/local/bin/xray', 'run', '-c', self.cfg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(1.5); return f"socks5://127.0.0.1:{self.port}"
+        time.sleep(2.5)
+        return f"socks5://127.0.0.1:{self.port}"
+
     def __exit__(self, *args):
-        if self.p: self.p.terminate()
-        if self.cfg and os.path.exists(self.cfg): os.remove(self.cfg)
+        if self.p:
+            try:
+                self.p.terminate()
+                self.p.wait(timeout=2)
+            except Exception:
+                try: self.p.kill()
+                except Exception: pass
+        if self.cfg and os.path.exists(self.cfg):
+            try: os.remove(self.cfg)
+            except Exception: pass
 
 def full_inbound_update(s, url, inb_id, original_ib, new_clients, panel_type, proxies):
     p2 = original_ib.copy()
@@ -1076,7 +1229,7 @@ cat << 'EOF_MAIN' > main.py
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-import sqlite3, uvicorn, os, glob
+import sqlite3, uvicorn, os, glob, subprocess
 
 for f in glob.glob('/tmp/userrenew_*.json'):
     try: os.remove(f)
@@ -1151,6 +1304,17 @@ def del_server(server_id: int):
     c.execute("DELETE FROM servers WHERE id=?", (server_id,))
     conn.commit(); conn.close(); return {"success": True}
 
+@app.get("/api/logs")
+def get_logs():
+    try:
+        proc = subprocess.run(
+            ["journalctl", "-u", "userrenew-bot", "-n", "80", "--no-pager"],
+            capture_output=True, text=True, timeout=5
+        )
+        return {"logs": proc.stdout or "هیچ لاگی در دسترس نیست."}
+    except Exception as e:
+        return {"logs": f"خطا در دریافت لاگ: {str(e)}"}
+
 @app.get("/", response_class=HTMLResponse)
 def serve_panel():
     with open("panel.html", "r", encoding="utf-8") as f: return f.read()
@@ -1158,11 +1322,34 @@ def serve_panel():
 if __name__ == "__main__": uvicorn.run(app, host="0.0.0.0", port=PORT_PLACEHOLDER)
 EOF_MAIN
 
-# Replace Placeholders
-sed -i "s/BOT_TOKEN_PLACEHOLDER/$BOT_TOKEN/g" /root/UserRenew/xray_bot.py
-sed -i "s/PORT_PLACEHOLDER/$PANEL_PORT/g" /root/UserRenew/main.py
-sed -i "s/ADMIN_PLACEHOLDER/$PANEL_USER/g" /root/UserRenew/main.py
-sed -i "s/PASS_PLACEHOLDER/$PANEL_PASS/g" /root/UserRenew/main.py
+# Replace Placeholders safely using Python to avoid character conflicts
+export B_TOK="$BOT_TOKEN"
+export P_PRT="$PANEL_PORT"
+export P_USR="$PANEL_USER"
+export P_PWD="$PANEL_PASS"
+
+python3 - << 'EOF'
+import os
+
+token = os.environ.get("B_TOK", "")
+port = os.environ.get("P_PRT", "")
+user = os.environ.get("P_USR", "")
+pwd = os.environ.get("P_PWD", "")
+
+with open('/root/UserRenew/xray_bot.py', 'r', encoding='utf-8') as f:
+    c = f.read()
+c = c.replace('BOT_TOKEN_PLACEHOLDER', token)
+with open('/root/UserRenew/xray_bot.py', 'w', encoding='utf-8') as f:
+    f.write(c)
+
+with open('/root/UserRenew/main.py', 'r', encoding='utf-8') as f:
+    c = f.read()
+c = c.replace('PORT_PLACEHOLDER', port)
+c = c.replace('ADMIN_PLACEHOLDER', user)
+c = c.replace('PASS_PLACEHOLDER', pwd)
+with open('/root/UserRenew/main.py', 'w', encoding='utf-8') as f:
+    f.write(c)
+EOF
 
 # Install Python Dependencies
 python3 -m venv venv
@@ -1183,7 +1370,16 @@ RESET="\e[0m"
 
 change_token() {
     read -p "Enter New Bot Token: " new_token
-    sed -i "s/BOT_TOKEN = \".*\"/BOT_TOKEN = \"$new_token\"/g" /root/UserRenew/xray_bot.py
+    export NEW_TOK="$new_token"
+    python3 - << 'EOF'
+import os, re
+token = os.environ.get("NEW_TOK", "")
+with open('/root/UserRenew/xray_bot.py', 'r', encoding='utf-8') as f:
+    c = f.read()
+c = re.sub(r'BOT_TOKEN\s*=\s*\".*?\"', f'BOT_TOKEN = "{token}"', c)
+with open('/root/UserRenew/xray_bot.py', 'w', encoding='utf-8') as f:
+    f.write(c)
+EOF
     systemctl restart userrenew-bot
     echo -e "${GREEN}[+] Bot token updated successfully!${RESET}"
     sleep 2
@@ -1210,7 +1406,7 @@ change_creds() {
 uninstall_all() {
     echo -e "${RED}[!] WARNING: This will delete everything (including database).${RESET}"
     read -p "Are you sure? (y/n): " confirm
-    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+    if [[ "$confirm" == "y" \vert{}\vert{} "$confirm" == "Y" ]]; then
         systemctl stop userrenew-panel userrenew-bot
         systemctl disable userrenew-panel userrenew-bot
         rm -f /etc/systemd/system/userrenew-*
@@ -1225,7 +1421,7 @@ uninstall_all() {
 while true; do
     clear
     echo -e "${CYAN}====================================================${RESET}"
-    echo -e "${PURPLE}             UserRenew Management                   ${RESET}"
+    echo -e "${PURPLE}             UserRenew Management${RESET}"
     echo -e "${CYAN}====================================================${RESET}"
     echo -e "1. ${YELLOW}Change Telegram Bot Token${RESET}"
     echo -e "2. ${YELLOW}Change Panel Web Port${RESET}"
@@ -1282,8 +1478,8 @@ systemctl restart userrenew-panel userrenew-bot
 IPV4=$(curl -4 -s icanhazip.com || curl -s -4 ifconfig.me)
 
 echo -e "${GREEN}====================================================${RESET}"
-echo -e "${GREEN}   Installation Completed Successfully!             ${RESET}"
+echo -e "${GREEN}   Installation Completed Successfully!${RESET}"
 echo -e "${PURPLE}[+] Panel URL:${RESET} http://$IPV4:$PANEL_PORT"
-echo -e "${PURPLE}[+] Admin Username:${RESET} $PANEL_USER"
-echo -e "${PURPLE}[+] Type ${GREEN}userrenew${PURPLE} in terminal for CLI menu.${RESET}"
+echo -e "${PURPLE}[+] Admin Username:${RESET}$PANEL_USER"
+echo -e "${PURPLE}[+] Type${GREEN}userrenew${PURPLE} in terminal for CLI menu.${RESET}"
 echo -e "${GREEN}====================================================${RESET}"
