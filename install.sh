@@ -433,50 +433,25 @@ def get_free_port():
         s.bind(('', 0)); return s.getsockname()[1]
 
 def build_xray_outbound(link):
-    if not link:
-        return None
+    if not link: return None
     link = link.strip()
     proto = link.split("://")[0].lower()
     
-    # 1. پشتیبانی کامل از VMess
     if proto == "vmess":
         try:
             b64_data = link.split("://")[1]
             pad = '=' * (-len(b64_data) % 4)
             v_data = json.loads(base64.b64decode(b64_data + pad).decode('utf-8'))
-            
             outbound = {
                 "protocol": "vmess",
-                "settings": {
-                    "vnext": [{
-                        "address": v_data.get("add"),
-                        "port": int(v_data.get("port", 443)),
-                        "users": [{
-                            "id": v_data.get("id"),
-                            "alterId": int(v_data.get("aid", 0)),
-                            "security": "auto"
-                        }]
-                    }]
-                },
-                "streamSettings": {
-                    "network": v_data.get("net", "tcp"),
-                    "security": "tls" if v_data.get("tls") in ["tls", "1"] else "none"
-                }
+                "settings": {"vnext": [{"address": v_data.get("add"), "port": int(v_data.get("port", 443)), "users": [{"id": v_data.get("id"), "alterId": int(v_data.get("aid", 0)), "security": "auto"}]}]},
+                "streamSettings": {"network": v_data.get("net", "tcp"), "security": "tls" if v_data.get("tls") in ["tls", "1"] else "none"}
             }
-            if v_data.get("net") == "ws":
-                outbound["streamSettings"]["wsSettings"] = {
-                    "path": v_data.get("path", "/"),
-                    "headers": {"Host": v_data.get("host", "")}
-                }
-            elif v_data.get("net") == "grpc":
-                outbound["streamSettings"]["grpcSettings"] = {
-                    "serviceName": v_data.get("path", "")
-                }
+            if v_data.get("net") == "ws": outbound["streamSettings"]["wsSettings"] = {"path": v_data.get("path", "/"), "headers": {"Host": v_data.get("host", "")}}
+            elif v_data.get("net") == "grpc": outbound["streamSettings"]["grpcSettings"] = {"serviceName": v_data.get("path", "")}
             return outbound
-        except Exception:
-            return None
+        except Exception: return None
 
-    # 2. پشتیبانی کامل از VLESS (همراه با Reality، TLS و Flow)
     elif proto == "vless":
         try:
             link = "vless://" + link.split("://")[-1]
@@ -484,61 +459,23 @@ def build_xray_outbound(link):
             qs = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
             def get_qs(key, default=""): return qs.get(key, [""])[0] or default
 
-            flow_val = get_qs("flow", "")
-            sec_val = get_qs("security", "none")
-            net_val = get_qs("type", "tcp")
-            enc_val = get_qs("encryption", "none")
-
-            user_obj = {
-                "id": parsed.username,
-                "encryption": enc_val
-            }
-            if flow_val:
-                user_obj["flow"] = flow_val
+            flow_val, sec_val, net_val, enc_val = get_qs("flow", ""), get_qs("security", "none"), get_qs("type", "tcp"), get_qs("encryption", "none")
+            user_obj = {"id": parsed.username, "encryption": enc_val}
+            if flow_val: user_obj["flow"] = flow_val
 
             outbound = {
                 "protocol": "vless",
-                "settings": {
-                    "vnext": [{
-                        "address": parsed.hostname,
-                        "port": int(parsed.port),
-                        "users": [user_obj]
-                    }]
-                },
-                "streamSettings": {
-                    "network": net_val,
-                    "security": sec_val
-                }
+                "settings": {"vnext": [{"address": parsed.hostname, "port": int(parsed.port), "users": [user_obj]}]},
+                "streamSettings": {"network": net_val, "security": sec_val}
             }
 
-            if sec_val == "tls":
-                outbound["streamSettings"]["tlsSettings"] = {
-                    "serverName": get_qs("sni", parsed.hostname),
-                    "fingerprint": get_qs("fp", "chrome")
-                }
-            elif sec_val == "reality":
-                outbound["streamSettings"]["realitySettings"] = {
-                    "serverName": get_qs("sni", parsed.hostname),
-                    "fingerprint": get_qs("fp", "chrome"),
-                    "publicKey": get_qs("pbk", ""),
-                    "shortId": get_qs("sid", ""),
-                    "spiderX": get_qs("spx", "")
-                }
+            if sec_val == "tls": outbound["streamSettings"]["tlsSettings"] = {"serverName": get_qs("sni", parsed.hostname), "fingerprint": get_qs("fp", "chrome")}
+            elif sec_val == "reality": outbound["streamSettings"]["realitySettings"] = {"serverName": get_qs("sni", parsed.hostname), "fingerprint": get_qs("fp", "chrome"), "publicKey": get_qs("pbk", ""), "shortId": get_qs("sid", ""), "spiderX": get_qs("spx", "")}
 
-            if net_val == "ws":
-                outbound["streamSettings"]["wsSettings"] = {
-                    "path": get_qs("path", "/"),
-                    "headers": {"Host": get_qs("host", "")}
-                }
-            elif net_val == "grpc":
-                outbound["streamSettings"]["grpcSettings"] = {
-                    "serviceName": get_qs("serviceName", "")
-                }
-
+            if net_val == "ws": outbound["streamSettings"]["wsSettings"] = {"path": get_qs("path", "/"), "headers": {"Host": get_qs("host", "")}}
+            elif net_val == "grpc": outbound["streamSettings"]["grpcSettings"] = {"serviceName": get_qs("serviceName", "")}
             return outbound
-        except Exception:
-            return None
-
+        except Exception: return None
     return None
 
 class XrayTunnel:
@@ -549,29 +486,17 @@ class XrayTunnel:
         self.cfg = None
 
     def __enter__(self):
-        if not self.link or not (self.link.startswith("vless://") or self.link.startswith("vmess://")):
-            return None
+        if not self.link or not (self.link.startswith("vless://") or self.link.startswith("vmess://")): return None
         out = build_xray_outbound(self.link)
-        if not out:
-            return None
+        if not out: return None
         self.port = get_free_port()
         self.cfg = f'/tmp/userrenew_{self.port}.json'
         
         with open(self.cfg, 'w') as f:
-            json.dump({
-                "log": {"loglevel": "none"},
-                "inbounds": [{
-                    "port": self.port,
-                    "listen": "127.0.0.1",
-                    "protocol": "socks",
-                    "settings": {"udp": True, "auth": "noauth"}
-                }],
-                "outbounds": [out]
-            }, f)
+            json.dump({"log": {"loglevel": "none"}, "inbounds": [{"port": self.port, "listen": "127.0.0.1", "protocol": "socks", "settings": {"udp": True, "auth": "noauth"}}], "outbounds": [out]}, f)
             
         self.p = subprocess.Popen(['/usr/local/bin/xray', 'run', '-c', self.cfg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
-        # پایش هوشمند پورت (Port Polling) به جای تاخیر ثابت ۲.۵ ثانیه‌ای
         connected = False
         for _ in range(30):
             try:
@@ -583,9 +508,7 @@ class XrayTunnel:
             except: pass
             time.sleep(0.08)
             
-        if not connected:
-            time.sleep(0.5)
-
+        if not connected: time.sleep(0.5)
         return f"socks5://127.0.0.1:{self.port}"
 
     def __exit__(self, *args):
@@ -609,8 +532,7 @@ def full_inbound_update(s, url, inb_id, original_ib, new_clients, panel_type, pr
     p2['settings'] = json.dumps(old_settings)
     
     for k in ['streamSettings', 'sniffing', 'allocate']:
-        if k in p2 and isinstance(p2[k], dict):
-            p2[k] = json.dumps(p2[k])
+        if k in p2 and isinstance(p2[k], dict): p2[k] = json.dumps(p2[k])
 
     if panel_type == 'old':
         p2["enable"] = "true" if p2.get("enable", True) else "false"
@@ -618,6 +540,27 @@ def full_inbound_update(s, url, inb_id, original_ib, new_clients, panel_type, pr
     else:
         p2["enable"] = bool(p2.get("enable", True))
         return s.post(f"{url}/panel/api/inbounds/update/{inb_id}", json=p2, proxies=proxies, timeout=10)
+
+def reset_traffic_universal(session, base_url, inb_id, cl_email, cl_uuid, px):
+    email_raw = str(cl_email).strip()
+    email_enc = urllib.parse.quote(email_raw)
+    uuid_val = str(cl_uuid).strip()
+    
+    session.headers.update({"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"})
+    endpoints = [
+        f"{base_url}/panel/api/clients/resetTraffic/{email_enc}",       
+        f"{base_url}/panel/api/clients/resetTraffic/{uuid_val}",        
+        f"{base_url}/panel/api/inbounds/{inb_id}/resetClientTraffic/{email_enc}" 
+    ]
+    
+    for ep in endpoints:
+        try:
+            r = session.post(ep, proxies=px, timeout=5)
+            if r.status_code == 200:
+                try:
+                    if r.json().get("success", False): break
+                except Exception: break
+        except Exception: continue
 
 def fetch_clients(server):
     url = server['host'].rstrip('/')
@@ -666,8 +609,7 @@ def perform_action(server_id, uuid_str, action, **kwargs):
         s = get_session(url)
         try:
             res_login = panel_login(s, url, srv['user'], srv['password'], proxies)
-            if not res_login or res_login.status_code != 200: 
-                return False, f"خطا در ورود به پنل (کد {res_login.status_code if res_login else 'نامشخص'})"
+            if not res_login or res_login.status_code != 200: return False, f"خطا در ورود به پنل"
             
             inbounds = s.get(f"{url}/panel/api/inbounds/list", proxies=proxies, timeout=8).json().get("obj", [])
             
@@ -718,10 +660,8 @@ def perform_action(server_id, uuid_str, action, **kwargs):
                         success = False
                         try: success = res.json().get('success')
                         except: success = (res.status_code == 200)
-                        if not success:
-                            full_inbound_update(s, url, target_inb, ib, clients_list, panel_type, proxies)
-                    else:
-                        full_inbound_update(s, url, target_inb, ib, clients_list, panel_type, proxies)
+                        if not success: full_inbound_update(s, url, target_inb, ib, clients_list, panel_type, proxies)
+                    else: full_inbound_update(s, url, target_inb, ib, clients_list, panel_type, proxies)
                         
                     state_msg = "فعال ✅" if new_enable_state else "غیرفعال ⏸"
                     msg_out = f"وضعیت اکانت با موفقیت تغییر کرد و اکنون **{state_msg}** است."
@@ -747,17 +687,10 @@ def perform_action(server_id, uuid_str, action, **kwargs):
                         success = False
                         try: success = res.json().get('success')
                         except: success = (res.status_code == 200)
-                        
-                        if not success:
-                            full_inbound_update(s, url, target_inb, ib, clients_list, panel_type, proxies)
-                            
-                        try: s.post(f"{url}/panel/api/inbounds/{target_inb}/resetClientTraffic/{target_cl['email']}", proxies=proxies, timeout=8)
-                        except: pass
-                    else:
-                        full_inbound_update(s, url, target_inb, ib, clients_list, panel_type, proxies)
-                        try: s.post(f"{url}/panel/api/inbounds/{target_inb}/resetClientTraffic/{target_cl['email']}", proxies=proxies, timeout=8)
-                        except: pass
-                        
+                        if not success: full_inbound_update(s, url, target_inb, ib, clients_list, panel_type, proxies)
+                    else: full_inbound_update(s, url, target_inb, ib, clients_list, panel_type, proxies)
+
+                    reset_traffic_universal(s, url, target_inb, target_cl.get('email', ''), uuid_str, proxies)
                     msg_out = "✅ **اکانت با موفقیت تمدید و حجم آن ریست شد.**"
                     
             return True, msg_out
@@ -818,8 +751,7 @@ def generate_raw_config_exact(protocol, uid, address, port, stream_settings, rem
     q_str = "&".join(f"{k}={urllib.parse.quote(str(v), safe='')}" for k, v in ordered_q.items() if v)
     remark_encoded = urllib.parse.quote(remark, safe='')
     
-    if protocol == "vless":
-        link = f"vless://{uid}@{address}:{port}?{q_str}#{remark_encoded}"
+    if protocol == "vless": link = f"vless://{uid}@{address}:{port}?{q_str}#{remark_encoded}"
     elif protocol == "trojan":
         t_pass = uid.replace("-", "")[:16]
         link = f"trojan://{t_pass}@{address}:{port}?{q_str}#{remark_encoded}"
@@ -890,8 +822,7 @@ def create_config(server_id, inb_ids_list, username, days, gb):
                     try: success_added = res.json().get('success', False)
                     except: success_added = (res.status_code == 200)
                 
-                if success_added:
-                    created_count += 1
+                if success_added: created_count += 1
             
             if created_count > 0:
                 raw_configs = []
@@ -1053,6 +984,13 @@ def handle_messages(m):
             try: bot.delete_message(m.chat.id, wait.message_id)
             except: pass
             safe_send(m.chat.id, msg, reply_markup=get_main_reply_keyboard())
+            if ok:
+                conn = get_db(); srv = conn.execute('SELECT * FROM servers WHERE id=?', (target['sid'],)).fetchone(); conn.close()
+                if srv:
+                    for cl in fetch_clients(dict(srv)):
+                        if cl['uuid'] == target['uuid']:
+                            show_client_info_and_keyboard(m.chat.id, cl)
+                            break
         elif txt == "🔄 تمدید اکانت":
             step_states[m.chat.id] = {'sid': target['sid'], 'uuid': target['uuid']}
             msg = bot.send_message(m.chat.id, "🔄 **تمدید:**\nتعداد روز را بصورت عدد وارد کنید:\n(0 = نامحدود | لغو)", parse_mode="Markdown", reply_markup=get_main_reply_keyboard())
@@ -1068,7 +1006,6 @@ def handle_messages(m):
     unique_found = {}
     server_list = [dict(s) for s in servers]
     
-    # جستجوی موازی و هم‌زمان در سرورها با ThreadPoolExecutor برای حداکثر سرعت
     if server_list:
         max_th = min(len(server_list), 6)
         with ThreadPoolExecutor(max_workers=max_th) as executor:
@@ -1241,12 +1178,18 @@ def step_gb(m):
     try: bot.delete_message(m.chat.id, wait.message_id)
     except: pass
     safe_send(m.chat.id, msg_resp, reply_markup=get_main_reply_keyboard())
+    if ok:
+        conn = get_db(); srv = conn.execute('SELECT * FROM servers WHERE id=?', (st['sid'],)).fetchone(); conn.close()
+        if srv:
+            for cl in fetch_clients(dict(srv)):
+                if cl['uuid'] == st['uuid']:
+                    show_client_info_and_keyboard(m.chat.id, cl)
+                    break
     step_states.pop(m.chat.id, None)
 
 @bot.callback_query_handler(func=lambda c: c.data == "ign")
 def ignore_clicks(call): bot.answer_callback_query(call.id, "این دکمه نمایشی است 📊")
 
-# پولینگ سریع با مدیریت تایم‌اوت‌های شبکه تلگرام
 bot.infinity_polling(timeout=10, long_polling_timeout=5, allowed_updates=['message', 'callback_query'])
 EOF_BOT
 
