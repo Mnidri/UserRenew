@@ -684,7 +684,7 @@ def perform_action(server_id, uuid_str, action, **kwargs):
 
                 elif action == "extend":
                     days, gb = kwargs['days'], kwargs['gb']
-                    exp_val = -(days * 86400000) if days > 0 else 0
+                    exp_val = int(time.time() * 1000) + (days * 86400000) if days > 0 else 0
                     gb_val = int(gb * 1073741824) if gb > 0 else 0
                     
                     cl['enable'] = True
@@ -798,7 +798,7 @@ def create_config(server_id, inb_ids_list, username, days, gb):
                 
                 client_dict = {
                     "email": username, "enable": True,
-                    "expiryTime": -(days * 86400000) if days > 0 else 0,
+                    "expiryTime": int(time.time() * 1000) + (days * 86400000) if days > 0 else 0,
                     "totalGB": int(gb * 1073741824) if gb > 0 else 0,
                     "subId": subid, "tgId": 0, "limitIp": 0, "reset": 0
                 }
