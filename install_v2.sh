@@ -525,85 +525,152 @@ class XrayTunnel:
             except Exception: pass
 
 def robust_client_action(s, url, action, inb_id, original_ib, client_dict, uuid_str, proxies):
+    import urllib.parse
+    import json
     base = url.rstrip('/')
     if s.cookies.get("x-ui-csrf"): s.headers.update({"X-CSRF-Token": s.cookies.get("x-ui-csrf")})
     
-    if action == "add":
-        settings_str = json.dumps({"clients": [client_dict]})
-        payloads = [
-            {"fmt": "json", "ep": "/panel/api/clients/add", "data": {"inboundIds": [inb_id], "client": client_dict}},
-            {"fmt": "json", "ep": "/panel/api/inbounds/addClient", "data": {"id": inb_id, "settings": settings_str}},
-            {"fmt": "form", "ep": "/panel/api/inbounds/addClient", "data": {"id": inb_id, "settings": settings_str}},
-            {"fmt": "json", "ep": "/panel/inbound/addClient", "data": {"id": inb_id, "settings": settings_str}}
-        ]
-        
-        for p in payloads:
+    email = client_dict.get("email", "") if client_dict else ""
+    email_enc = urllib.parse.quote(str(email)) if email else ""
+    uid = str(uuid_str or client_dict.get("id") or "")
+    inb_id_int = int(inb_id) if str(inb_id).isdigit() else inb_id
+
+    # ساخت کپی استاندارد با مقادیر امن عددی
+    c = {}
+    if client_dict:
+        c = client_dict.copy()
+        if uid and not c.get("id"): c["id"] = uid
+        c["tgId"] = int(c.get("tgId") or 0)
+        c["subId"] = str(c.get("subId") or "")
+        c["limitIp"] = int(c.get("limitIp") or 0)
+        c["totalGB"] = int(c.get("totalGB") or 0)
+        c["expiryTime"] = int(c.get("expiryTime") or 0)
+        c["reset"] = int(c.get("reset") or 0)
+        c["enable"] = bool(c.get("enable", True))
+
+    c_str = json.dumps({"clients": [c]})
+
+    try:
+        # ==========================================
+        # 1. متد ساخت کاربر (ADD)
+        # ==========================================
+        if action == "add":
+            # گام الف: نسخه 3.10 و جدید
+            s.headers.update({"Accept": "application/json", "Content-Type": "application/json"})
             try:
-                s.headers.update({"Content-Type": "application/json"} if p["fmt"] == "json" else {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"})
-                r = s.post(base + p["ep"], json=p["data"] if p["fmt"] == "json" else None, data=p["data"] if p["fmt"] != "json" else None, proxies=proxies, timeout=5)
+                r = s.post(f"{base}/panel/api/clients/add", json={"inboundIds": [inb_id_int], "client": c}, proxies=proxies, timeout=6)
                 if r.status_code == 200 and r.json().get("success"): return True
             except: pass
 
-        try:
-            new_clients = safe_loads(original_ib.get("settings", "{}")).get("clients", [])
-            new_clients.append(client_dict)
-            payload_upd = original_ib.copy()
-            payload_upd.pop("clientStats", None)
-            stgs = safe_loads(payload_upd.get("settings", "{}"))
-            stgs["clients"] = new_clients
-            payload_upd["settings"] = json.dumps(stgs)
-            s.headers.update({"Content-Type": "application/json"})
-            r_upd = s.post(f"{base}/panel/api/inbounds/update/{inb_id}", json=payload_upd, proxies=proxies, timeout=6)
-            if r_upd.status_code == 200 and r_upd.json().get("success"): return True
-        except: pass
-
-    elif action in ["extend", "toggle"]:
-        settings_str = json.dumps({"clients": [client_dict]})
-        payloads = [
-            {"fmt": "json", "ep": f"/panel/api/clients/{uuid_str}", "data": {"inboundIds": [inb_id], "client": client_dict}},
-            {"fmt": "json", "ep": f"/panel/api/clients/update/{uuid_str}", "data": {"inboundIds": [inb_id], "client": client_dict}},
-            {"fmt": "json", "ep": f"/panel/api/clients/update/{uuid_str}", "data": {"inboundId": inb_id, "settings": settings_str}},
-            {"fmt": "json", "ep": f"/panel/api/inbounds/updateClient/{uuid_str}", "data": {"id": inb_id, "settings": settings_str}},
-            {"fmt": "form", "ep": f"/panel/api/inbounds/updateClient/{uuid_str}", "data": {"id": inb_id, "settings": settings_str}}
-        ]
-        for p in payloads:
+            # گام ب: نسخه‌های 3.0 تا 3.7 (Inbounds JSON)
             try:
-                s.headers.update({"Content-Type": "application/json"} if p["fmt"] == "json" else {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"})
-                r = s.post(base + p["ep"], json=p["data"] if p["fmt"] == "json" else None, data=p["data"] if p["fmt"] != "json" else None, proxies=proxies, timeout=5)
+                r = s.post(f"{base}/panel/api/inbounds/addClient", json={"id": inb_id_int, "settings": c_str}, proxies=proxies, timeout=6)
                 if r.status_code == 200 and r.json().get("success"): return True
             except: pass
 
-    elif action == "delete":
-        endpoints = [f"/panel/api/clients/{uuid_str}/del", f"/panel/api/clients/del/{uuid_str}", f"/panel/api/inbounds/{inb_id}/delClient/{uuid_str}"]
-        for ep in endpoints:
+            # گام ج: نسخه‌های قدیمی (Form-Data)
+            s.headers.update({"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"})
             try:
-                s.headers.update({"Content-Type": "application/json"})
-                r = s.post(base + ep, proxies=proxies, timeout=5)
+                r = s.post(f"{base}/panel/api/inbounds/addClient", data={"id": inb_id_int, "settings": c_str}, proxies=proxies, timeout=6)
                 if r.status_code == 200 and r.json().get("success"): return True
             except: pass
-            
+
+        # ==========================================
+        # 2. متد تمدید و تغییر وضعیت (EXTEND / TOGGLE)
+        # ==========================================
+        elif action in ["extend", "toggle"]:
+            # گام الف: استاندارد سنایی 3.10+ (بر پایه Email و بادی خالص)
+            if email_enc:
+                s.headers.update({"Accept": "application/json", "Content-Type": "application/json"})
+                try:
+                    r = s.post(f"{base}/panel/api/clients/update/{email_enc}", json=c, proxies=proxies, timeout=6)
+                    if r.status_code == 200 and r.json().get("success"): return True
+                except: pass
+
+            # گام ب: نسخه 3.7 و میانی (Clients update با UUID)
+            if uid:
+                s.headers.update({"Accept": "application/json", "Content-Type": "application/json"})
+                try:
+                    r = s.post(f"{base}/panel/api/clients/update/{uid}", json={"id": uid, "client": c}, proxies=proxies, timeout=6)
+                    if r.status_code == 200 and r.json().get("success"): return True
+                except: pass
+
+            # گام ج: نسخه 3 به پایین (Inbound updateClient بر پایه UUID با JSON)
+            if uid:
+                s.headers.update({"Accept": "application/json", "Content-Type": "application/json"})
+                try:
+                    r = s.post(f"{base}/panel/api/inbounds/updateClient/{uid}", json={"id": inb_id_int, "settings": c_str}, proxies=proxies, timeout=6)
+                    if r.status_code == 200 and r.json().get("success"): return True
+                except: pass
+
+            # گام د: نسخه کلاسیک x-ui (Form-Data)
+            if uid:
+                s.headers.update({"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"})
+                try:
+                    r = s.post(f"{base}/panel/api/inbounds/updateClient/{uid}", data={"id": inb_id_int, "settings": c_str}, proxies=proxies, timeout=6)
+                    if r.status_code == 200 and r.json().get("success"): return True
+                except: pass
+
+        # ==========================================
+        # 3. متد حذف کاربر (DELETE)
+        # ==========================================
+        elif action == "delete":
+            # گام الف: بر پایه Email (نسخه‌های جدید)
+            if email_enc:
+                s.headers.update({"Accept": "application/json", "Content-Type": "application/json"})
+                try:
+                    r = s.post(f"{base}/panel/api/clients/{email_enc}/del", proxies=proxies, timeout=6)
+                    if r.status_code == 200 and r.json().get("success"): return True
+                except: pass
+                try:
+                    r = s.post(f"{base}/panel/api/clients/del/{email_enc}", proxies=proxies, timeout=6)
+                    if r.status_code == 200 and r.json().get("success"): return True
+                except: pass
+
+            # گام ب: بر پایه UUID در کلاینت‌ها (نسخه‌های میانی)
+            if uid:
+                s.headers.update({"Accept": "application/json", "Content-Type": "application/json"})
+                try:
+                    r = s.post(f"{base}/panel/api/clients/{uid}/del", proxies=proxies, timeout=6)
+                    if r.status_code == 200 and r.json().get("success"): return True
+                except: pass
+
+            # گام ج: نسخه‌های زیر 3 (delClient از اینباند)
+            if uid:
+                try:
+                    r = s.post(f"{base}/panel/api/inbounds/{inb_id_int}/delClient/{uid}", proxies=proxies, timeout=6)
+                    if r.status_code == 200 and r.json().get("success"): return True
+                except: pass
+
+    except Exception:
+        pass
+
     return False
 
 def reset_traffic_universal(session, base_url, inb_id, cl_email, cl_uuid, px):
+    import urllib.parse
     email_raw = str(cl_email).strip()
-    email_enc = urllib.parse.quote(email_raw)
-    uuid_val = str(cl_uuid).strip()
+    email_enc = urllib.parse.quote(email_raw) if email_raw else ""
+    uid = str(cl_uuid).strip() if cl_uuid else ""
+    inb_id_int = int(inb_id) if str(inb_id).isdigit() else inb_id
+
+    session.headers.update({"Accept": "application/json, text/plain, */*", "Content-Type": "application/json"})
     
-    session.headers.update({"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"})
-    endpoints = [
-        f"{base_url}/panel/api/clients/resetTraffic/{email_enc}",       
-        f"{base_url}/panel/api/clients/resetTraffic/{uuid_val}",        
-        f"{base_url}/panel/api/inbounds/{inb_id}/resetClientTraffic/{email_enc}" 
-    ]
-    
+    endpoints = []
+    if email_enc:
+        endpoints.append(f"{base_url}/panel/api/clients/resetTraffic/{email_enc}")
+        endpoints.append(f"{base_url}/panel/api/inbounds/{inb_id_int}/resetClientTraffic/{email_enc}")
+    if uid:
+        endpoints.append(f"{base_url}/panel/api/clients/resetTraffic/{uid}")
+        endpoints.append(f"{base_url}/panel/api/inbounds/{inb_id_int}/resetClientTraffic/{uid}")
+
     for ep in endpoints:
         try:
             r = session.post(ep, proxies=px, timeout=5)
-            if r.status_code == 200:
-                try:
-                    if r.json().get("success", False): break
-                except Exception: break
-        except Exception: continue
+            if r.status_code == 200 and r.json().get("success", False):
+                break
+        except Exception:
+            continue
 
 def fetch_clients(server):
     url = server['host'].rstrip('/')
