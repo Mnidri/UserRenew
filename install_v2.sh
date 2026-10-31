@@ -457,7 +457,7 @@ def build_xray_outbound(link):
         try:
             link = "vless://" + link.split("://")[-1]
             parsed = urllib.parse.urlparse(link)
-            qs = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+            qs = urllib.parse.parseqs(parsed.query, keep_blank_values=True)
             def get_qs(key, default=""): return qs.get(key, [""])[0] or default
 
             flow_val, sec_val, net_val, enc_val = get_qs("flow", ""), get_qs("security", "none"), get_qs("type", "tcp"), get_qs("encryption", "none")
@@ -739,7 +739,7 @@ def perform_action(server_id, uuid_str, action, **kwargs):
                 target_inb = ib['id']
                 
                 if action == "delete":
-                    robust_client_action(s, url, "delete", target_inb, ib, None, uuid_str, proxies)
+                    robust_client_action(s, url, "delete", target_inb, ib, cl, uuid_str, proxies)
                     msg_out = "کانفیگ با موفقیت حذف شد. 🗑"
 
                 elif action == "toggle":
